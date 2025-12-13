@@ -3,12 +3,17 @@ import makeWASocket, { DisconnectReason, useMultiFileAuthState } from '@whiskeys
 import * as qrcode from 'qrcode-terminal';
 import pino from 'pino';
 import * as fs from 'fs';
+import { PrismaService } from '../prisma/prisma.service'; // ایمپورت دیتابیس
 
 @Injectable()
 export class WhatsappService implements OnModuleInit {
   private sessions = new Map<string, any>();
 
+  // تزریق سرویس دیتابیس
+  constructor(private prisma: PrismaService) {}
+
   async onModuleInit() {
+    // بازیابی سشن‌ها از روی فایل هنگام ریستارت
     const authDir = 'auth_info';
     if (fs.existsSync(authDir)) {
       const sessionFolders = fs.readdirSync(authDir);
@@ -26,24 +31,34 @@ export class WhatsappService implements OnModuleInit {
     const sock = makeWASocket({
       auth: state,
       logger: pino({ level: 'silent' }) as any,
-      connectTimeoutMs: 60000, // افزایش تایم‌اوت اتصال
-      defaultQueryTimeoutMs: 60000, // افزایش تایم‌اوت کوئری‌ها (برای عکس مهم است)
+      connectTimeoutMs: 60000,
+      defaultQueryTimeoutMs: 60000,
     });
 
     this.sessions.set(sessionId, sock);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
         console.log(`\nScan QR for session: ${sessionId}`);
         qrcode.generate(qr, { small: true });
+        
+        // آپدیت وضعیت در دیتابیس (منتظر اسکن)
+        await this.prisma.session.upsert({
+            where: { id: sessionId },
+            update: { status: 'SCAN_QR' },
+            create: { id: sessionId, status: 'SCAN_QR' }
+        });
       }
 
       if (connection === 'close') {
         const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
+        
+        // آپدیت دیتابیس (قطع شد)
+        await this.prisma.session.update({ where: { id: sessionId }, data: { status: 'DISCONNECTED' } }).catch(() => {});
+
         if (shouldReconnect) {
-          // مکانیزم تاخیر در اتصال مجدد برای جلوگیری از لوپ
           setTimeout(() => this.createSession(sessionId), 3000);
         } else {
           console.log(`Session ${sessionId} logged out.`);
@@ -51,18 +66,43 @@ export class WhatsappService implements OnModuleInit {
         }
       } else if (connection === 'open') {
         console.log(`✅ Session ${sessionId} is ready!`);
+        
+        // آپدیت دیتابیس (متصل شد + ذخیره شماره متصل شده)
+        const myPhone = sock.user?.id?.split(':')[0];
+        await this.prisma.session.upsert({
+            where: { id: sessionId },
+            update: { status: 'CONNECTED', phone: myPhone },
+            create: { id: sessionId, status: 'CONNECTED', phone: myPhone }
+        });
       }
     });
 
     sock.ev.on('creds.update', saveCreds);
 
+    // --- ذخیره پیام‌های دریافتی ---
     sock.ev.on('messages.upsert', async (m) => {
       const msg = m.messages[0];
       const senderJid = msg.key.remoteJid;
-      if (!msg.key.fromMe && m.type === 'notify' && senderJid) {
-        const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
-        console.log(`[${sessionId}] Msg from ${senderJid}: ${text}`);
-        if (text.trim() === 'سلام') {
+
+      if (m.type === 'notify' && senderJid) {
+        const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || '';
+        const isFromMe = msg.key.fromMe || false;
+
+        // ذخیره در دیتابیس
+        await this.prisma.message.create({
+            data: {
+                text: text,
+                sender: senderJid.replace('@s.whatsapp.net', ''),
+                receiver: 'ME',
+                isFromMe: isFromMe,
+                type: msg.message?.imageMessage ? 'image' : 'text',
+                sessionId: sessionId
+            }
+        });
+        console.log(`💾 Incoming message saved for ${sessionId}`);
+        
+        // چت بات ساده
+        if (!isFromMe && text.trim() === 'سلام') {
             await sock.sendMessage(senderJid, { text: 'سلام! ربات هستم 🤖' }, { quoted: msg });
         }
       }
@@ -71,17 +111,13 @@ export class WhatsappService implements OnModuleInit {
     return { status: 'initializing', sessionId };
   }
 
-  // --- تابع کمکی برای اطمینان از اتصال ---
+  // تابع کمکی برای اطمینان از اتصال
   private async waitForConnection(sessionId: string, sock: any): Promise<boolean> {
     if (sock.ws.isOpen) return true;
-
-    console.log(`⚠️ Session ${sessionId} is not open. Waiting...`);
-    
-    // تلاش می‌کنیم تا 5 ثانیه منتظر وصل شدن بمانیم
     let retries = 0;
     while (retries < 10) {
         if (sock.ws.isOpen) return true;
-        await new Promise(r => setTimeout(r, 500)); // نیم ثانیه صبر
+        await new Promise(r => setTimeout(r, 500));
         retries++;
     }
     return false;
@@ -90,21 +126,31 @@ export class WhatsappService implements OnModuleInit {
   async sendTextMessage(sessionId: string, phone: string, message: string) {
     const sock = this.sessions.get(sessionId);
     if (!sock) throw new Error(`Session ${sessionId} not found!`);
-
     await this.waitForConnection(sessionId, sock);
 
     const jid = `${phone}@s.whatsapp.net`;
     await sock.sendMessage(jid, { text: message });
+
+    // --- ذخیره پیام ارسالی در دیتابیس ---
+    await this.prisma.message.create({
+        data: {
+            text: message,
+            sender: 'ME',
+            receiver: phone,
+            isFromMe: true,
+            type: 'text',
+            sessionId: sessionId
+        }
+    });
+
     return { status: 'success', sessionId, phone };
   }
 
   async sendImageMessage(sessionId: string, phone: string, imageSource: string, caption: string, isLocalFile: boolean = false) {
     const sock = this.sessions.get(sessionId);
     if (!sock) throw new Error(`Session ${sessionId} not found!`);
-
-    // ۱. اطمینان از اتصال
-    const isConnected = await this.waitForConnection(sessionId, sock);
-    if (!isConnected) throw new Error('Connection failed via waitForConnection');
+    
+    await this.waitForConnection(sessionId, sock);
 
     const jid = `${phone}@s.whatsapp.net`;
     let imagePayload: any;
@@ -120,16 +166,20 @@ export class WhatsappService implements OnModuleInit {
         imagePayload = { image: { url: imageSource }, caption: caption };
     }
 
-    // ۲. تلاش برای ارسال با مدیریت خطا
-    try {
-        await sock.sendMessage(jid, imagePayload);
-        return { status: 'success', sessionId, type: 'image' };
-    } catch (error) {
-        console.error('Send Error, retrying once...', error);
-        // تلاش مجدد (یک بار)
-        await new Promise(r => setTimeout(r, 2000)); // ۲ ثانیه صبر
-        await sock.sendMessage(jid, imagePayload);
-        return { status: 'success', sessionId, type: 'image', retry: true };
-    }
+    await sock.sendMessage(jid, imagePayload);
+
+    // --- ذخیره پیام تصویری در دیتابیس ---
+    await this.prisma.message.create({
+        data: {
+            text: caption || '[IMAGE]',
+            sender: 'ME',
+            receiver: phone,
+            isFromMe: true,
+            type: 'image',
+            sessionId: sessionId
+        }
+    });
+
+    return { status: 'success', sessionId, type: 'image' };
   }
 }
