@@ -2,124 +2,134 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 import makeWASocket, { DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys';
 import * as qrcode from 'qrcode-terminal';
 import pino from 'pino';
+import * as fs from 'fs';
 
 @Injectable()
 export class WhatsappService implements OnModuleInit {
-  // این متغیر سوکت را نگه می‌دارد تا در همه جای کلاس در دسترس باشد
-  private sock: any;
+  private sessions = new Map<string, any>();
 
   async onModuleInit() {
-    this.connectToWhatsapp();
+    const authDir = 'auth_info';
+    if (fs.existsSync(authDir)) {
+      const sessionFolders = fs.readdirSync(authDir);
+      console.log(`🔄 Found ${sessionFolders.length} sessions on disk. Reconnecting...`);
+      for (const sessionId of sessionFolders) {
+        this.createSession(sessionId);
+      }
+    }
   }
 
-  async connectToWhatsapp() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+  async createSession(sessionId: string) {
+    const authFolder = `auth_info/${sessionId}`;
+    const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
-    this.sock = makeWASocket({
+    const sock = makeWASocket({
       auth: state,
       logger: pino({ level: 'silent' }) as any,
+      connectTimeoutMs: 60000, // افزایش تایم‌اوت اتصال
+      defaultQueryTimeoutMs: 60000, // افزایش تایم‌اوت کوئری‌ها (برای عکس مهم است)
     });
 
-    this.sock.ev.on('connection.update', (update) => {
+    this.sessions.set(sessionId, sock);
+
+    sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        console.log('QR Code received, please scan!');
+        console.log(`\nScan QR for session: ${sessionId}`);
         qrcode.generate(qr, { small: true });
       }
 
       if (connection === 'close') {
         const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
-        console.log('Connection closed, reconnecting:', shouldReconnect);
-        
         if (shouldReconnect) {
-          this.connectToWhatsapp();
+          // مکانیزم تاخیر در اتصال مجدد برای جلوگیری از لوپ
+          setTimeout(() => this.createSession(sessionId), 3000);
+        } else {
+          console.log(`Session ${sessionId} logged out.`);
+          this.sessions.delete(sessionId);
         }
       } else if (connection === 'open') {
-        console.log('Opened connection to WhatsApp!');
+        console.log(`✅ Session ${sessionId} is ready!`);
       }
     });
 
-    this.sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', saveCreds);
 
-    // ... کدهای قبلی (connection.update)
-
-    // ۴. گوش دادن به پیام‌های جدید
-   // ۴. گوش دادن به پیام‌های جدید
-    this.sock.ev.on('messages.upsert', async (m) => {
+    sock.ev.on('messages.upsert', async (m) => {
       const msg = m.messages[0];
-
-      // شرط اول: پیام نباید از طرف خود ربات باشد
-      if (!msg.key.fromMe && m.type === 'notify') {
-        
-        console.log('------------------------------------------------');
-        console.log('📩 New Message Packet Received');
-
-        // استخراج متن پیام (با در نظر گرفتن همه حالات ممکن)
-        const text = msg.message?.conversation || 
-                     msg.message?.extendedTextMessage?.text || 
-                     msg.message?.imageMessage?.caption || 
-                     '';
-
-        const senderJid = msg.key.remoteJid;
-
-        console.log('👤 Sender:', senderJid);
-        console.log('💬 Text Received:', `"${text}"`); // گذاشتن داخل "" برای دیدن فاصله‌های اضافی
-
-        // اصلاح شرط: به جای === از includes استفاده میکنیم تا اگر فاصله داشت هم کار کند
-        // همچنین trim() را استفاده میکنیم تا فاصله‌های اول و آخر را حذف کند
-        if (text && text.trim() === 'سلام') {
-           console.log('✅ Keyword "Salam" matched! Attempting to reply...');
-           
-           try {
-             // نکته مهم: اینجا مستقیم از sendMessage استفاده می‌کنیم
-             // و senderJid را مستقیم پاس می‌دهیم (چون فرمت آن درست است)
-             await this.sock.sendMessage(senderJid, { 
-               text: 'سلام! چطور میتونم کمکتون کنم؟ 🤖' 
-             }, { quoted: msg }); // این باعث می‌شود روی پیام کاربر ریپلای کند
-
-             console.log('✅ Reply sent successfully');
-           } catch (error) {
-             console.error('❌ Error sending reply:', error);
-           }
-        } else {
-            console.log('❌ Keyword did not match. (Received !== Expected)');
+      const senderJid = msg.key.remoteJid;
+      if (!msg.key.fromMe && m.type === 'notify' && senderJid) {
+        const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+        console.log(`[${sessionId}] Msg from ${senderJid}: ${text}`);
+        if (text.trim() === 'سلام') {
+            await sock.sendMessage(senderJid, { text: 'سلام! ربات هستم 🤖' }, { quoted: msg });
         }
       }
     });
-    
 
-    this.sock.ev.on('creds.update', saveCreds);
+    return { status: 'initializing', sessionId };
   }
 
-// --- تابع ارسال عکس ---
-  async sendImageMessage(phone: string, imageUrl: string, caption: string) {
-    if (!this.sock) throw new Error('Whatsapp is not connected!');
+  // --- تابع کمکی برای اطمینان از اتصال ---
+  private async waitForConnection(sessionId: string, sock: any): Promise<boolean> {
+    if (sock.ws.isOpen) return true;
+
+    console.log(`⚠️ Session ${sessionId} is not open. Waiting...`);
+    
+    // تلاش می‌کنیم تا 5 ثانیه منتظر وصل شدن بمانیم
+    let retries = 0;
+    while (retries < 10) {
+        if (sock.ws.isOpen) return true;
+        await new Promise(r => setTimeout(r, 500)); // نیم ثانیه صبر
+        retries++;
+    }
+    return false;
+  }
+
+  async sendTextMessage(sessionId: string, phone: string, message: string) {
+    const sock = this.sessions.get(sessionId);
+    if (!sock) throw new Error(`Session ${sessionId} not found!`);
+
+    await this.waitForConnection(sessionId, sock);
 
     const jid = `${phone}@s.whatsapp.net`;
-
-    // ارسال عکس از طریق URL
-    await this.sock.sendMessage(jid, { 
-      image: { url: imageUrl }, 
-      caption: caption 
-    });
-
-    return { status: 'success', type: 'image' };
+    await sock.sendMessage(jid, { text: message });
+    return { status: 'success', sessionId, phone };
   }
-  
-  // --- تابع جدید برای ارسال پیام ---
-  async sendTextMessage(phone: string, message: string) {
-    if (!this.sock) {
-      throw new Error('Whatsapp is not connected yet!');
+
+  async sendImageMessage(sessionId: string, phone: string, imageSource: string, caption: string, isLocalFile: boolean = false) {
+    const sock = this.sessions.get(sessionId);
+    if (!sock) throw new Error(`Session ${sessionId} not found!`);
+
+    // ۱. اطمینان از اتصال
+    const isConnected = await this.waitForConnection(sessionId, sock);
+    if (!isConnected) throw new Error('Connection failed via waitForConnection');
+
+    const jid = `${phone}@s.whatsapp.net`;
+    let imagePayload: any;
+
+    if (isLocalFile) {
+        try {
+            const imageBuffer = fs.readFileSync(imageSource);
+            imagePayload = { image: imageBuffer, caption: caption };
+        } catch (error) {
+            throw new Error(`Local file not found: ${imageSource}`);
+        }
+    } else {
+        imagePayload = { image: { url: imageSource }, caption: caption };
     }
 
-    // فرمت کردن شماره برای واتساپ (مثلاً 98912... به 98912...@s.whatsapp.net)
-    // فرض می‌کنیم شماره ورودی بدون + و صفر اول است
-    const jid = `${phone}@s.whatsapp.net`;
-
-    // ارسال پیام (صبر می‌کنیم تا ارسال شود)
-    await this.sock.sendMessage(jid, { text: message });
-
-    return { status: 'success', phone, message };
+    // ۲. تلاش برای ارسال با مدیریت خطا
+    try {
+        await sock.sendMessage(jid, imagePayload);
+        return { status: 'success', sessionId, type: 'image' };
+    } catch (error) {
+        console.error('Send Error, retrying once...', error);
+        // تلاش مجدد (یک بار)
+        await new Promise(r => setTimeout(r, 2000)); // ۲ ثانیه صبر
+        await sock.sendMessage(jid, imagePayload);
+        return { status: 'success', sessionId, type: 'image', retry: true };
+    }
   }
 }
