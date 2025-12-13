@@ -1,73 +1,66 @@
-import { Body, Controller, Post ,UseGuards } from '@nestjs/common';
+import { Body, Controller, Post, UseGuards, Request } from '@nestjs/common';
 import { WhatsappService } from './whatsapp.service';
-import { ApiProperty, ApiTags,ApiSecurity, ApiOperation } from '@nestjs/swagger';
-import { ApiKeyGuard } from '../auth/api-key.guard'; // ایمپورت گارد جدید
+import { ApiBearerAuth, ApiOperation, ApiTags, ApiProperty, ApiSecurity } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
-// --- تعریف ساختار داده‌ها (DTOs) ---
-// این کلاس‌ها باعث می‌شوند در Swagger فیلدها نمایش داده شوند
-
+// --- DTOs ---
 class StartSessionDto {
-  @ApiProperty({ example: 'user_1', description: 'نام کاربری یا شناسه یکتا' })
+  @ApiProperty({ example: 'session_1' })
   sessionId: string;
 }
 
 class SendTextDto {
-  @ApiProperty({ example: 'user_1' })
+  @ApiProperty({ example: 'session_1' })
   sessionId: string;
-
-  @ApiProperty({ example: '989365052887', description: 'شماره موبایل بدون +' })
+  @ApiProperty({ example: '989915130152' })
   phone: string;
-
-  @ApiProperty({ example: 'سلام، این یک تست است' })
+  @ApiProperty({ example: 'سلام' })
   message: string;
 }
 
 class SendImageDto {
-  @ApiProperty({ example: 'user_1' })
+  @ApiProperty({ example: 'session_1' })
   sessionId: string;
-
-  @ApiProperty({ example: '989365052887' })
+  @ApiProperty({ example: '989915130152' })
   phone: string;
-
-  @ApiProperty({ example: 'https://via.placeholder.com/150', description: 'لینک عکس یا مسیر فایل لوکال' })
+  @ApiProperty({ example: './test.jpeg' })
   imageUrl: string;
-
   @ApiProperty({ example: 'توضیحات عکس' })
   caption: string;
-
-  @ApiProperty({ example: false, required: false, description: 'آیا فایل روی سرور است؟' })
+  @ApiProperty({ example: true, required: false })
   local?: boolean;
 }
 
-// --- کنترلر اصلی ---
-@ApiTags('WhatsApp') // دسته‌بندی در داکیومنت
+@ApiTags('WhatsApp')
+@ApiBearerAuth() // نمایش دکمه توکن در سواگر
+@UseGuards(JwtAuthGuard) // فعال کردن قفل امنیتی برای همه متدها
 @Controller('whatsapp')
-@ApiSecurity('api-key') // ۱. اضافه کردن قفل به داکیومنت سواگر
-@UseGuards(ApiKeyGuard) // ۲. فعال کردن نگهبان برای کل این کنترلر
 export class WhatsappController {
   constructor(private readonly whatsappService: WhatsappService) {}
 
   @Post('start')
-  @ApiOperation({ summary: 'ایجاد نشست جدید / دریافت QR Code' })
-  async startSession(@Body() body: StartSessionDto) {
-    return this.whatsappService.createSession(body.sessionId);
+  @ApiOperation({ summary: 'ایجاد نشست جدید' })
+  async startSession(@Body() body: StartSessionDto, @Request() req) {
+    // ارسال userId از توکن به سرویس
+    return this.whatsappService.createSession(body.sessionId, req.user.userId);
   }
 
   @Post('send')
   @ApiOperation({ summary: 'ارسال پیام متنی' })
-  async sendMessage(@Body() body: SendTextDto) {
-    return this.whatsappService.sendTextMessage(body.sessionId, body.phone, body.message);
+  async sendMessage(@Body() body: SendTextDto, @Request() req) {
+    return this.whatsappService.sendTextMessage(body.sessionId, body.phone, body.message, req.user.userId);
   }
 
   @Post('send-image')
-  @ApiOperation({ summary: 'ارسال عکس (لینک یا فایل)' })
-  async sendImage(@Body() body: SendImageDto) {
+  @ApiOperation({ summary: 'ارسال پیام تصویری' })
+  async sendImage(@Body() body: SendImageDto, @Request() req) {
     return this.whatsappService.sendImageMessage(
         body.sessionId, 
         body.phone, 
         body.imageUrl, 
         body.caption, 
-        body.local || false
+        body.local || false,
+        req.user.userId // ارسال شناسه کاربر
     );
   }
 }

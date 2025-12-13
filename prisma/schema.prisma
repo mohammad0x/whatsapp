@@ -3,19 +3,38 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql" // تغییر از sqlite به postgresql
   url      = env("DATABASE_URL")
 }
 
-model Session {
-  id        String   @id
-  phone     String?
-  status    String   @default("DISCONNECTED")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  messages  Message[]
+// 👤 جدول کاربران (برای ثبت نام)
+model User {
+  id        Int       @id @default(autoincrement())
+  email     String    @unique
+  password  String    // رمز عبور هش شده
+  name      String?
+  createdAt DateTime  @default(now())
+  
+  // ارتباط: هر کاربر چندین نشست واتساپ دارد
+  sessions  Session[]
 }
 
+// 📱 جدول نشست‌های واتساپ
+model Session {
+  id        String   @id // مثلا: session_123
+  phone     String?
+  status    String   @default("DISCONNECTED")
+  
+  // ارتباط با کاربر (مالک این خط کیست؟)
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  
+  messages  Message[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// 💬 جدول پیام‌ها
 model Message {
   id        Int      @id @default(autoincrement())
   text      String
@@ -24,6 +43,7 @@ model Message {
   isFromMe  Boolean
   type      String
   createdAt DateTime @default(now())
+
   sessionId String
-  session   Session  @relation(fields: [sessionId], references: [id])
+  session   Session @relation(fields: [sessionId], references: [id])
 }

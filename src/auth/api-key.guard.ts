@@ -7,16 +7,13 @@ export class ApiKeyGuard implements CanActivate {
     context: ExecutionContext,
   ): boolean | Promise<boolean> | Observable<boolean> {
     const request = context.switchToHttp().getRequest();
-    
-    // ۱. چاپ تمام هدرهای دریافتی در کنسول (برای عیب یابی)
-    console.log('------------------------------------------------');
-    console.log('🔍 Incoming Headers:', request.headers);
+   
     
     // نکته مهم: در Node.js تمام هدرها به حروف کوچک (lowercase) تبدیل می‌شوند
     // پس حتما باید با حروف کوچک چک کنیم
     const apiKey = request.headers['x-api-key'];
 
-    const MY_SECRET_KEY = 'my-secret-password-123';
+    const MY_SECRET_KEY = '1234';
 
 
 

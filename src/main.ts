@@ -6,15 +6,13 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   const config = new DocumentBuilder()
-    .setTitle('WhatsApp API Service')
-    .setDescription('سرویس ارسال پیام واتساپ')
+    .setTitle('WhatsApp API')
+    .setDescription('The WhatsApp automation API description')
     .setVersion('1.0')
-    .addTag('whatsapp')
-    // --- خط جدید: تعریف نوع امنیت ---
-    .addApiKey({ type: 'apiKey', name: 'x-api-key', in: 'header' }, 'api-key')
-    // -----------------------------
+    // 👇 این خط جدید است: اضافه کردن قابلیت توکن
+    .addBearerAuth() 
     .build();
-  
+
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api', app, document);
 
