@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards, Request } from '@nestjs/common';
+import { Body, Controller,Get,Param, Post, UseGuards, Request } from '@nestjs/common';
 import { WhatsappService } from './whatsapp.service';
 import { ApiBearerAuth, ApiOperation, ApiTags, ApiProperty, ApiSecurity } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -7,6 +7,13 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 class StartSessionDto {
   @ApiProperty({ example: 'session_1' })
   sessionId: string;
+}
+
+class SetWebhookDto {
+  @ApiProperty({ example: 'session_1' })
+  sessionId: string;
+  @ApiProperty({ example: 'http://localhost:4000/webhook' })
+  url: string;
 }
 
 class SendTextDto {
@@ -45,6 +52,18 @@ export class WhatsappController {
     return this.whatsappService.createSession(body.sessionId, req.user.userId);
   }
 
+  @Post('webhook')
+  @ApiOperation({ summary: 'تنظیم آدرس وب‌هوک برای دریافت پیام‌ها' })
+  async setWebhook(@Body() body: SetWebhookDto, @Request() req) {
+    return this.whatsappService.setWebhook(body.sessionId, body.url, req.user.userId);
+  }
+
+  @Get('status/:sessionId')
+  @ApiOperation({ summary: 'دریافت وضعیت اتصال و عکس QR' })
+  async getStatus(@Param('sessionId') sessionId: string, @Request() req) {
+    return this.whatsappService.getSessionStatus(sessionId, req.user.userId);
+  }
+
   @Post('send')
   @ApiOperation({ summary: 'ارسال پیام متنی' })
   async sendMessage(@Body() body: SendTextDto, @Request() req) {
@@ -63,4 +82,5 @@ export class WhatsappController {
         req.user.userId // ارسال شناسه کاربر
     );
   }
+  
 }

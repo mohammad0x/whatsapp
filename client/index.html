@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>پنل مدیریت واتساپ</title>
+    <style>
+        body { font-family: Tahoma, sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .card { background: white; padding: 2rem; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 350px; text-align: center; }
+        input { width: 90%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 5px; }
+        button { width: 100%; padding: 10px; background: #25D366; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #128C7E; }
+        .hidden { display: none; }
+        #qrImage { width: 250px; height: 250px; margin: 10px auto; border: 1px solid #eee; object-fit: contain; }
+        .status { margin-top: 10px; font-weight: bold; color: #555; }
+    </style>
+</head>
+<body>
+
+    <div id="loginSection" class="card">
+        <h2>ورود به پنل</h2>
+        <input type="email" id="email" placeholder="ایمیل (admin@test.com)">
+        <input type="password" id="password" placeholder="رمز عبور">
+        <button onclick="login()">ورود</button>
+    </div>
+
+    <div id="dashboardSection" class="card hidden">
+        <h2>مدیریت واتساپ</h2>
+        <div id="connectionBox">
+            <input type="text" id="sessionId" placeholder="نام نشست (مثلا my-ws)">
+            <button onclick="startWhatsapp()">افزودن واتساپ جدید</button>
+        </div>
+        
+        <div id="qrBox" class="hidden">
+            <p>لطفاً با واتساپ اسکن کنید:</p>
+            <img id="qrImage" src="" alt="QR Code">
+            <p class="status" id="statusText">در انتظار QR...</p>
+        </div>
+
+        <div id="connectedBox" class="hidden">
+            <h3>✅ متصل شد!</h3>
+            <p>شماره: <span id="phoneNum"></span></p>
+            <button onclick="logout()">خروج</button>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:3000';
+        let token = localStorage.getItem('token');
+        let refreshInterval;
+
+        if (token) showDashboard();
+
+        async function login() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            
+            const res = await fetch(`${API_URL}/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                token = data.access_token;
+                localStorage.setItem('token', token);
+                showDashboard();
+            } else {
+                alert('ایمیل یا رمز اشتباه است');
+            }
+        }
+
+        function showDashboard() {
+            document.getElementById('loginSection').classList.add('hidden');
+            document.getElementById('dashboardSection').classList.remove('hidden');
+        }
+
+        async function startWhatsapp() {
+            const sessionId = document.getElementById('sessionId').value;
+            if(!sessionId) return alert('نام نشست را وارد کنید');
+
+            // 1. درخواست شروع
+            await fetch(`${API_URL}/whatsapp/start`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ sessionId })
+            });
+
+            // 2. نمایش باکس QR
+            document.getElementById('connectionBox').classList.add('hidden');
+            document.getElementById('qrBox').classList.remove('hidden');
+
+            // 3. شروع چک کردن وضعیت هر 2 ثانیه
+            refreshInterval = setInterval(() => checkStatus(sessionId), 2000);
+        }
+
+        async function checkStatus(sessionId) {
+            const res = await fetch(`${API_URL}/whatsapp/status/${sessionId}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+
+            if (data.qr) {
+                document.getElementById('qrImage').src = data.qr;
+                document.getElementById('statusText').innerText = "QR آماده اسکن";
+            }
+
+            if (data.status === 'CONNECTED') {
+                clearInterval(refreshInterval);
+                document.getElementById('qrBox').classList.add('hidden');
+                document.getElementById('connectedBox').classList.remove('hidden');
+                document.getElementById('phoneNum').innerText = data.phone;
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            location.reload();
+        }
+    </script>
+</body>
+</html>

@@ -24,6 +24,7 @@ model Session {
   id        String   @id // مثلا: session_123
   phone     String?
   status    String   @default("DISCONNECTED")
+  webhookUrl String?
   
   // ارتباط با کاربر (مالک این خط کیست؟)
   userId    Int

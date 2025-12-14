@@ -28,6 +28,9 @@ app.post('/webhook', async (req, res) => {
         else if (text.includes('قیمت')) {
             replyText = '💰 قیمت اشتراک ماهیانه ما ۱۰۰ هزار تومان است.';
         }
+        else if (text.includes('کونی')) {
+            replyText = 'باباته';
+        }
         else if (text.includes('ساعت')) {
             replyText = `⏰ ساعت فعلی سرور: ${new Date().toLocaleTimeString('fa-IR')}`;
         }
