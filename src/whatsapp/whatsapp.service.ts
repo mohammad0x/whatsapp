@@ -317,4 +317,47 @@ export class WhatsappService implements OnModuleInit {
 
     return { status: 'success', type: 'image' };
   }
+  // 👇 1. دریافت لیست مخاطبین (برای سایدبار پنل)
+  async getContacts(sessionId: string) {
+    // همه پیام‌ها را می‌گیریم تا مخاطبین یکتا را پیدا کنیم
+    // نکته: در پروژه‌های بزرگ باید جدول جداگانه Contact داشته باشید، اما اینجا فعلا کافیست
+    const messages = await this.prisma.message.findMany({
+        where: { sessionId },
+        orderBy: { createdAt: 'desc' },
+        distinct: ['sender', 'receiver'] // فقط یکی از هر کدام
+    });
+
+    // فیلتر کردن و تمیز کردن لیست
+    const contacts = new Map<string, any>();
+    
+    messages.forEach(msg => {
+        // اگر پیام از طرف من است، گیرنده مخاطب است. اگر از طرف اوست، فرستنده مخاطب است.
+        const contactPhone = msg.isFromMe ? msg.receiver : msg.sender;
+        
+        // جلوگیری از تکرار و حذف پیام‌های سیستمی
+        if (contactPhone !== 'ME' && contactPhone !== 'BOT' && !contacts.has(contactPhone)) {
+            contacts.set(contactPhone, {
+                phone: contactPhone,
+                lastMessage: msg.text,
+                time: msg.createdAt
+            });
+        }
+    });
+
+    return Array.from(contacts.values());
+  }
+
+  // 👇 2. دریافت تاریخچه کامل چت با یک شماره خاص
+  async getChatHistory(sessionId: string, phone: string) {
+    return this.prisma.message.findMany({
+        where: {
+            sessionId: sessionId,
+            OR: [
+                { sender: phone },   // پیام‌هایی که او فرستاده
+                { receiver: phone }  // پیام‌هایی که ما فرستادیم
+            ]
+        },
+        orderBy: { createdAt: 'asc' } // از قدیم به جدید (مثل تلگرام/واتساپ)
+    });
+  }
 }

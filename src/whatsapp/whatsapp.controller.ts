@@ -143,4 +143,18 @@ export class WhatsappController {
     return { summary: 'Bulk sending completed', results };
   }
   
+  @Get('contacts/:sessionId')
+  @ApiOperation({ summary: 'دریافت لیست افرادی که پیام داده‌اند (Team Inbox Sidebar)' })
+  async getContacts(@Param('sessionId') sessionId: string) {
+    return this.whatsappService.getContacts(sessionId);
+  }
+
+  @Get('history/:sessionId/:phone')
+  @ApiOperation({ summary: 'دریافت تمام پیام‌های یک مشتری خاص' })
+  async getChatHistory(
+    @Param('sessionId') sessionId: string,
+    @Param('phone') phone: string
+  ) {
+    return this.whatsappService.getChatHistory(sessionId, phone);
+  }
 }
