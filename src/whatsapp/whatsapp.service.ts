@@ -5,15 +5,19 @@ import pino from 'pino';
 import * as fs from 'fs';
 import axios from 'axios';
 import { PrismaService } from '../prisma/prisma.service';
+import { ChatbotService } from './chatbot.service'; // 👈 ایمپورت چت‌بات
 
 @Injectable()
 export class WhatsappService implements OnModuleInit {
   private sessions = new Map<string, any>();
   private qrCodes = new Map<string, string>();
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private chatbotService: ChatbotService // 👈 تزریق سرویس چت‌بات
+  ) {}
 
-  // 🔄 بازیابی نشست‌ها
+  // 🔄 بازیابی نشست‌ها هنگام ریستارت
   async onModuleInit() {
     const authDir = 'auth_info';
     if (fs.existsSync(authDir)) {
@@ -70,7 +74,7 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  // 🔥 هسته اصلی
+  // 🔥 هسته اصلی: ساخت اتصال واتساپ
   async createSession(sessionId: string, userId: number) {
     const authFolder = `auth_info/${sessionId}`;
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
@@ -84,6 +88,7 @@ export class WhatsappService implements OnModuleInit {
 
     this.sessions.set(sessionId, sock);
 
+    // مدیریت رویدادهای اتصال
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
@@ -117,7 +122,7 @@ export class WhatsappService implements OnModuleInit {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // 📩 مدیریت پیام‌ها (بخش اصلاح شده و نهایی)
+    // 📩 مدیریت پیام‌ها (ترکیب چت‌بات + وب‌هوک)
     sock.ev.on('messages.upsert', async (m) => {
       try {
         const msg = m.messages[0];
@@ -126,11 +131,8 @@ export class WhatsappService implements OnModuleInit {
         const senderJid = msg.key.remoteJid;
         const isFromMe = msg.key.fromMe;
         
-        // 🛠️ اصلاح ۱: اگر فرستنده نامشخص است، کلاً ادامه نده (حل مشکل Null)
+        // اصلاح ۱: جلوگیری از خطای Null
         if (!senderJid) return;
-
-        // 🕵️‍♂️ لاگ برای دیباگ
-        console.log(`📨 Msg: ${senderJid} | FromMe: ${isFromMe}`);
 
         // فیلتر زمانی
         const messageTimestamp = typeof msg.messageTimestamp === 'number' 
@@ -139,10 +141,10 @@ export class WhatsappService implements OnModuleInit {
         const now = Math.floor(Date.now() / 1000);
         if (messageTimestamp && (now - messageTimestamp > 60)) return;
 
-        // فیلتر هویت (جلوگیری از پاسخ به خود)
+        // فیلتر هویت
         if (isFromMe) return;
 
-        // 🛠️ اصلاح ۲: پشتیبانی از LID و کاربران عادی
+        // اصلاح ۲: پشتیبانی از LID و کاربران عادی
         const isUser = senderJid.endsWith('@s.whatsapp.net') || senderJid.endsWith('@lid');
 
         if (isUser) {
@@ -152,24 +154,12 @@ export class WhatsappService implements OnModuleInit {
 
             if (!text) return;
 
-            console.log(`✅ Processing Message: ${text}`);
+            console.log(`📨 New Message: ${text} | From: ${senderJid}`);
 
             // استخراج شناسه صحیح
             const phone = senderJid.endsWith('@lid') ? senderJid : senderJid.replace('@s.whatsapp.net', '');
 
-            // ارسال به وب‌هوک
-            const session = await this.prisma.session.findUnique({ where: { id: sessionId } });
-            if (session && session.webhookUrl) {
-                axios.post(session.webhookUrl, {
-                    event: 'message',
-                    sessionId: sessionId,
-                    phone: phone,
-                    text: text,
-                    timestamp: new Date()
-                }).catch(err => console.error(`❌ Webhook Failed: ${err.message}`));
-            }
-            
-            // ذخیره در دیتابیس
+            // 💾 ۱. اول ذخیره پیام کاربر
             try {
                 await this.prisma.message.create({
                     data: {
@@ -182,6 +172,38 @@ export class WhatsappService implements OnModuleInit {
                     }
                 });
             } catch (e) {}
+
+            // 🤖 ۲. بررسی چت‌بات داخلی (اولویت بالا)
+            const botReply = this.chatbotService.getResponse(phone, text);
+
+            if (botReply) {
+                console.log(`🤖 Internal Bot Replying: ${botReply}`);
+                
+                await sock.sendPresenceUpdate('composing', senderJid);
+                await new Promise(r => setTimeout(r, 1000));
+
+                const replyJid = senderJid.endsWith('@lid') ? senderJid : `${phone}@s.whatsapp.net`;
+                await sock.sendMessage(replyJid, { text: botReply });
+                
+                await this.prisma.message.create({
+                    data: { text: botReply, sender: 'BOT', receiver: phone, isFromMe: true, type: 'text', sessionId }
+                });
+                
+                return; // ⛔ کار تمام شد، دیگر به وب‌هوک نفرست
+            }
+
+            // 🌐 ۳. ارسال به وب‌هوک (اگر ربات جوابی نداشت)
+            const session = await this.prisma.session.findUnique({ where: { id: sessionId } });
+            if (session && session.webhookUrl) {
+                console.log(`🚀 Sending to webhook: ${session.webhookUrl}`);
+                axios.post(session.webhookUrl, {
+                    event: 'message',
+                    sessionId: sessionId,
+                    phone: phone,
+                    text: text,
+                    timestamp: new Date()
+                }).catch(err => console.error(`❌ Webhook Failed: ${err.message}`));
+            }
         }
       } catch (error) {
           console.error('Upsert Error:', error);
@@ -191,7 +213,7 @@ export class WhatsappService implements OnModuleInit {
     return { status: 'initializing', sessionId };
   }
 
-  // --- ارسال پیام ---
+  // --- ابزارهای ارسال پیام ---
 
   private async validateUserAccess(sessionId: string, userId: number) {
     const session = await this.prisma.session.findUnique({ where: { id: sessionId } });
@@ -207,31 +229,69 @@ export class WhatsappService implements OnModuleInit {
     throw new Error('Connection timed out');
   }
 
+  // ارسال متن
   async sendTextMessage(sessionId: string, phone: string, message: string, userId: number) {
     await this.validateUserAccess(sessionId, userId);
     const sock = this.sessions.get(sessionId);
     if (!sock) throw new Error(`Session ${sessionId} not active!`);
     await this.waitForConnection(sessionId, sock);
 
-    // مدیریت آدرس‌های LID و عادی
     const jid = (phone.includes('@') || phone.includes(':')) ? phone : `${phone}@s.whatsapp.net`;
-
     await sock.sendMessage(jid, { text: message });
 
     await this.prisma.message.create({
-        data: {
-            text: message,
-            sender: 'ME',
-            receiver: phone,
-            isFromMe: true,
-            type: 'text',
-            sessionId
-        }
+        data: { text: message, sender: 'ME', receiver: phone, isFromMe: true, type: 'text', sessionId }
     });
 
     return { status: 'success', sessionId, phone };
   }
 
+  // ارسال فایل (PDF, Doc, ...)
+  async sendDocumentMessage(sessionId: string, phone: string, fileUrl: string, fileName: string, caption: string, userId: number) {
+    await this.validateUserAccess(sessionId, userId);
+    const sock = this.sessions.get(sessionId);
+    if (!sock) throw new Error('Session not active');
+    await this.waitForConnection(sessionId, sock);
+
+    const jid = (phone.includes('@') || phone.includes(':')) ? phone : `${phone}@s.whatsapp.net`;
+
+    try {
+        let buffer: Buffer;
+        let mimetype: string = 'application/octet-stream';
+
+        // دانلود از اینترنت
+        if (fileUrl.startsWith('http://') || fileUrl.startsWith('https://')) {
+            console.log(`📥 Downloading: ${fileUrl}`);
+            const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+            buffer = Buffer.from(response.data, 'binary');
+            mimetype = response.headers['content-type'] || 'application/pdf';
+        } 
+        // خواندن از فایل لوکال
+        else {
+            console.log(`📂 Reading local: ${fileUrl}`);
+            if (!fs.existsSync(fileUrl)) throw new Error(`File not found: ${fileUrl}`);
+            buffer = fs.readFileSync(fileUrl);
+            if (fileName.endsWith('.pdf')) mimetype = 'application/pdf';
+        }
+
+        await sock.sendMessage(jid, {
+            document: buffer,
+            mimetype: mimetype,
+            fileName: fileName,
+            caption: caption
+        });
+
+        await this.prisma.message.create({
+            data: { text: caption || `[FILE: ${fileName}]`, sender: 'ME', receiver: phone, isFromMe: true, type: 'document', sessionId }
+        });
+
+        return { status: 'success', type: 'document', fileName };
+    } catch (error) {
+        throw new Error(`Send File Error: ${error.message}`);
+    }
+  }
+
+  // ارسال عکس
   async sendImageMessage(sessionId: string, phone: string, imageSource: string, caption: string, isLocalFile: boolean, userId: number) {
     await this.validateUserAccess(sessionId, userId);
     const sock = this.sessions.get(sessionId);
@@ -252,14 +312,7 @@ export class WhatsappService implements OnModuleInit {
     await sock.sendMessage(jid, imagePayload);
     
     await this.prisma.message.create({
-        data: {
-            text: caption || '[IMAGE]',
-            sender: 'ME',
-            receiver: phone,
-            isFromMe: true,
-            type: 'image',
-            sessionId
-        }
+        data: { text: caption || '[IMAGE]', sender: 'ME', receiver: phone, isFromMe: true, type: 'image', sessionId }
     });
 
     return { status: 'success', type: 'image' };

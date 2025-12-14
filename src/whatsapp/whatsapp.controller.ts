@@ -37,7 +37,29 @@ class SendImageDto {
   @ApiProperty({ example: true, required: false })
   local?: boolean;
 }
+class SendFileDto {
+  @ApiProperty({ example: 'session_1' })
+  sessionId: string;
+  @ApiProperty({ example: '989915130152' })
+  phone: string;
+  @ApiProperty({ example: './nic.pdf' })
+  fileUrl: string;
+  @ApiProperty({ example: 'Invoice-1402.pdf' })
+  fileName: string;
+  @ApiProperty({ example: 'سلام، فاکتور خرید شما' })
+  caption: string;
+}
 
+class SendBulkDto {
+  @ApiProperty({ example: 'session_1' })
+  sessionId: string;
+  @ApiProperty({ example: ['989915130152', '989001099069'] })
+  phones: string[];
+  @ApiProperty({ example: 'جشنواره فروش ویژه شروع شد!' })
+  message: string;
+  @ApiProperty({ example: 5, description: 'Delay in seconds' })
+  delay: number;
+}
 @ApiTags('WhatsApp')
 @ApiBearerAuth() // نمایش دکمه توکن در سواگر
 @UseGuards(JwtAuthGuard) // فعال کردن قفل امنیتی برای همه متدها
@@ -81,6 +103,44 @@ export class WhatsappController {
         body.local || false,
         req.user.userId // ارسال شناسه کاربر
     );
+  }
+  // 1️⃣ API ارسال فایل (فاکتور)
+  @Post('send-file')
+  @ApiOperation({ summary: 'ارسال فایل (PDF, Zip, Doc) از طریق لینک' })
+  async sendFile(@Body() body: SendFileDto, @Request() req) {
+    return this.whatsappService.sendDocumentMessage(
+        body.sessionId, 
+        body.phone, 
+        body.fileUrl, 
+        body.fileName, 
+        body.caption, 
+        req.user.userId
+    );
+  }
+
+  @Post('send-bulk')
+  @ApiOperation({ summary: 'ارسال پیام همزمان به چند نفر (با تاخیر امن)' })
+  async sendBulk(@Body() body: SendBulkDto, @Request() req) {
+    // 👇 تغییر مهم: اضافه کردن : any[]
+    const results: any[] = []; 
+    
+    const delayTime = body.delay * 1000 || 5000;
+
+    for (const phone of body.phones) {
+        try {
+            await this.whatsappService.sendTextMessage(body.sessionId, phone, body.message, req.user.userId);
+            results.push({ phone, status: 'sent' });
+            
+            // تاخیر
+            if (body.phones.length > 1) {
+                await new Promise(resolve => setTimeout(resolve, delayTime));
+            }
+            
+        } catch (error) {
+            results.push({ phone, status: 'failed', error: error.message });
+        }
+    }
+    return { summary: 'Bulk sending completed', results };
   }
   
 }
