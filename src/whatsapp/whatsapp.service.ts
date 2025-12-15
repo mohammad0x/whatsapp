@@ -360,4 +360,16 @@ export class WhatsappService implements OnModuleInit {
         orderBy: { createdAt: 'asc' } // از قدیم به جدید (مثل تلگرام/واتساپ)
     });
   }
+  // 👇 این متد جدید را اضافه کنید
+  // کارش این است که SessionId را بر اساس توکن کاربر پیدا می‌کند
+  async getSessionIdByUser(userId: number): Promise<string> {
+    const session = await this.prisma.session.findFirst({
+        where: { userId: userId }
+    });
+
+    if (!session) {
+        throw new Error('⛔ شما هنوز هیچ رباتی نساخته‌اید. ابتدا /start را بزنید.');
+    }
+    return session.id;
+  }
 }
