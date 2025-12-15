@@ -1,11 +1,8 @@
-import { Body, Controller, Get, Param, Post, UseGuards, Request } from '@nestjs/common';
+import { Body, Controller,UseInterceptors,UploadedFile, Get, Param, Post, UseGuards, Request } from '@nestjs/common';
 import { WhatsappService } from './whatsapp.service';
-import { ApiBearerAuth, ApiOperation, ApiTags, ApiProperty } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiConsumes,ApiBody,ApiOperation, ApiTags, ApiProperty } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-
-// ==========================================
-// 1️⃣ بخش DTOها (بدون SessionId)
-// ==========================================
+import { FileInterceptor } from '@nestjs/platform-express'; 
 
 class StartSessionDto {
   // برای استارت، کاربر می‌تواند نام دلخواه بدهد یا ندهد
@@ -22,15 +19,17 @@ class SendTextDto {
   message: string;
 }
 
-class SendImageDto {
+
+// DTO مخصوص آپلود
+class UploadImageDto {
   @ApiProperty({ description: 'شماره موبایل گیرنده' })
   phone: string;
-  @ApiProperty({ description: 'لینک عکس' })
-  imageUrl: string;
-  @ApiProperty({ description: 'توضیحات (اختیاری)', required: false })
+
+  @ApiProperty({ description: 'توضیحات عکس (اختیاری)', required: false })
   caption: string;
-  @ApiProperty({ description: 'آیا فایل لوکال است؟', required: false, default: false })
-  local?: boolean;
+
+  // نکته: فایل اینجا تعریف نمی‌شود چون در Body نیست، بلکه در Form-Data است.
+  // اما برای Swagger باید آن را دستی تعریف کنیم (در کنترلر).
 }
 
 class SendFileDto {
@@ -81,14 +80,13 @@ export class WhatsappController {
   }
 
   // 📊 وضعیت (اتوماتیک)
-  @Get('status')
-  @ApiOperation({ summary: 'دریافت وضعیت ربات من' })
-  async getStatus(@Request() req) {
-    // 🔍 پیدا کردن خودکار سشن کاربر
-    const sessionId = await this.whatsappService.getSessionIdByUser(req.user.userId);
+// 👇 اصلاح شده: اضافه کردن :sessionId به آدرس
+  @Get('status/:sessionId')
+  @ApiOperation({ summary: 'بررسی وضعیت و دریافت QR' })
+  async getStatus(@Param('sessionId') sessionId: string, @Request() req) {
+    // به جای پیدا کردن اتوماتیک، وضعیتِ همان نشستی که HTML خواسته را برمی‌گردانیم
     return this.whatsappService.getSessionStatus(sessionId, req.user.userId);
   }
-
   // 📩 ارسال متن
   @Post('send-text')
   @ApiOperation({ summary: 'ارسال پیام متنی' })
@@ -103,16 +101,39 @@ export class WhatsappController {
   }
 
   // 📷 ارسال عکس
-  @Post('send-image')
-  @ApiOperation({ summary: 'ارسال پیام تصویری' })
-  async sendImage(@Body() body: SendImageDto, @Request() req) {
+  // 📤 متد جدید: آپلود مستقیم عکس
+  @Post('upload-image')
+  @UseInterceptors(FileInterceptor('file')) // نام فیلد فایل باید 'file' باشد
+  @ApiConsumes('multipart/form-data') // به Swagger می‌گوید این یک آپلود فایل است
+  @ApiOperation({ summary: 'آپلود مستقیم عکس از کامپیوتر' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        phone: { type: 'string' },
+        caption: { type: 'string' },
+        file: { // تعریف دکمه فایل در Swagger
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  async uploadImage(
+    @Body() body: UploadImageDto,
+    @UploadedFile() file: Express.Multer.File, // دریافت فایل
+    @Request() req
+  ) {
+    // چک کردن اینکه فایلی آپلود شده یا نه
+    if (!file) throw new Error('❌ لطفا یک فایل انتخاب کنید!');
+
     const sessionId = await this.whatsappService.getSessionIdByUser(req.user.userId);
-    return this.whatsappService.sendImageMessage(
-        sessionId, 
-        body.phone, 
-        body.imageUrl, 
-        body.caption || '', 
-        body.local || false,
+    
+    return this.whatsappService.sendImageBuffer(
+        sessionId,
+        body.phone,
+        file.buffer, // ارسال بافر فایل به سرویس
+        body.caption || '',
         req.user.userId
     );
   }

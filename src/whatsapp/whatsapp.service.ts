@@ -222,9 +222,9 @@ export class WhatsappService implements OnModuleInit {
 
   private async waitForConnection(sessionId: string, sock: any): Promise<boolean> {
     if (sock.ws.isOpen) return true;
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 20; i++) {
         if (sock.ws.isOpen) return true;
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 1000));
     }
     throw new Error('Connection timed out');
   }
@@ -292,30 +292,52 @@ export class WhatsappService implements OnModuleInit {
   }
 
   // ارسال عکس
-  async sendImageMessage(sessionId: string, phone: string, imageSource: string, caption: string, isLocalFile: boolean, userId: number) {
+  async sendImageBuffer(sessionId: string, phone: string, fileBuffer: Buffer, caption: string, userId: number) {
     await this.validateUserAccess(sessionId, userId);
+    
     const sock = this.sessions.get(sessionId);
     if (!sock) throw new Error('Session not active');
     await this.waitForConnection(sessionId, sock);
 
-    const jid = (phone.includes('@') || phone.includes(':')) ? phone : `${phone}@s.whatsapp.net`;
-    let imagePayload: any;
+    // تمیز کردن شماره
+    const cleanPhone = phone.replace('+', '').replace(/^0/, '98');
+    const jid = (cleanPhone.includes('@')) ? cleanPhone : `${cleanPhone}@s.whatsapp.net`;
 
-    if (isLocalFile) {
-        try {
-            imagePayload = { image: fs.readFileSync(imageSource), caption };
-        } catch (error) { throw new Error(`File not found: ${imageSource}`); }
-    } else {
-        imagePayload = { image: { url: imageSource }, caption };
+    console.log(`📤 Uploading to ${jid} | Size: ${fileBuffer.length}`);
+
+    if (!Buffer.isBuffer(fileBuffer) || fileBuffer.length === 0) {
+        throw new Error('❌ فایل خراب یا خالی است');
     }
 
-    await sock.sendMessage(jid, imagePayload);
-    
-    await this.prisma.message.create({
-        data: { text: caption || '[IMAGE]', sender: 'ME', receiver: phone, isFromMe: true, type: 'image', sessionId }
-    });
+    try {
+        // تغییر مهم: اضافه کردن mimetype به صورت دستی
+        // این کار باعث می‌شود واتساپ گیج نشود
+        await sock.sendMessage(jid, {
+            image: fileBuffer,
+            caption: caption,
+            mimetype: 'image/jpeg' // فرض می‌کنیم اکثر عکس‌ها jpeg هستند
+        });
 
-    return { status: 'success', type: 'image' };
+        console.log('✅ Image sent to socket');
+
+        // ذخیره در دیتابیس
+        await this.prisma.message.create({
+            data: {
+                text: caption || '[UPLOADED IMAGE]',
+                sender: 'ME',
+                receiver: cleanPhone,
+                isFromMe: true,
+                type: 'image',
+                sessionId
+            }
+        });
+
+        return { status: 'success', type: 'image_upload' };
+
+    } catch (error) {
+        console.error('❌ Error sending image:', error);
+        throw new Error(`Failed: ${error.message}`);
+    }
   }
   // 👇 1. دریافت لیست مخاطبین (برای سایدبار پنل)
   async getContacts(sessionId: string) {

@@ -3,45 +3,127 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>پنل مدیریت واتساپ</title>
+    <title>پنل پیشرفته واتساپ</title>
     <style>
-        body { font-family: Tahoma, sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .card { background: white; padding: 2rem; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 350px; text-align: center; }
-        input { width: 90%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 5px; }
-        button { width: 100%; padding: 10px; background: #25D366; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
-        button:hover { background: #128C7E; }
+        body { font-family: Tahoma, sans-serif; background: #eef2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        
+        /* استایل کارت اصلی */
+        .card { 
+            background: white; 
+            padding: 0; /* پدینگ داخلی حذف شد تا تب‌ها بچسبند */
+            border-radius: 15px; 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1); 
+            width: 450px; 
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* استایل هدر و تب‌ها */
+        .tabs { display: flex; background: #f8f9fa; border-bottom: 1px solid #ddd; }
+        .tab-btn { 
+            flex: 1; 
+            padding: 15px; 
+            border: none; 
+            background: none; 
+            cursor: pointer; 
+            font-weight: bold; 
+            color: #666; 
+            transition: 0.3s;
+        }
+        .tab-btn:hover { background: #e9ecef; }
+        .tab-btn.active { 
+            background: white; 
+            color: #25D366; 
+            border-bottom: 3px solid #25D366; 
+        }
+
+        /* محتوای داخلی */
+        .content { padding: 2rem; }
         .hidden { display: none; }
-        #qrImage { width: 250px; height: 250px; margin: 10px auto; border: 1px solid #eee; object-fit: contain; }
-        .status { margin-top: 10px; font-weight: bold; color: #555; }
+
+        input, textarea { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; }
+        textarea { resize: vertical; min-height: 100px; font-family: Tahoma; }
+        
+        button.action-btn { 
+            width: 100%; padding: 12px; 
+            background: #25D366; color: white; 
+            border: none; border-radius: 8px; 
+            cursor: pointer; font-size: 16px; font-weight: bold;
+            transition: 0.2s;
+        }
+        button.action-btn:hover { background: #128C7E; transform: translateY(-2px); }
+        
+        .btn-logout { background: #e74c3c; margin-top: 10px; width: 100%; padding: 10px; color: white; border: none; border-radius: 8px; cursor: pointer; }
+
+        /* وضعیت و QR */
+        #qrImage { width: 200px; height: 200px; margin: 10px auto; display: block; border: 1px solid #eee; border-radius: 10px; }
+        .status-badge { 
+            text-align: center; padding: 10px; 
+            margin-bottom: 15px; border-radius: 8px; 
+            font-weight: bold; font-size: 14px;
+        }
+        .connected-bg { background: #d4edda; color: #155724; }
+        .disconnected-bg { background: #f8d7da; color: #721c24; }
+        .waiting-bg { background: #fff3cd; color: #856404; }
+
+        /* لاگین فرم */
+        #loginSection { padding: 2rem; text-align: center; }
     </style>
 </head>
 <body>
 
     <div id="loginSection" class="card">
-        <h2>ورود به پنل</h2>
-        <input type="email" id="email" placeholder="ایمیل (admin@test.com)">
+        <h2>🔐 ورود به سیستم</h2>
+        <input type="email" id="email" placeholder="ایمیل">
         <input type="password" id="password" placeholder="رمز عبور">
-        <button onclick="login()">ورود</button>
+        <button class="action-btn" onclick="login()">ورود</button>
+        <button style="background:none; border:none; color:#3498db; margin-top:10px; cursor:pointer;" onclick="signup()">ثبت نام حساب جدید</button>
     </div>
 
     <div id="dashboardSection" class="card hidden">
-        <h2>مدیریت واتساپ</h2>
-        <div id="connectionBox">
-            <input type="text" id="sessionId" placeholder="نام نشست (مثلا my-ws)">
-            <button onclick="startWhatsapp()">افزودن واتساپ جدید</button>
-        </div>
         
-        <div id="qrBox" class="hidden">
-            <p>لطفاً با واتساپ اسکن کنید:</p>
-            <img id="qrImage" src="" alt="QR Code">
-            <p class="status" id="statusText">در انتظار QR...</p>
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('connectTab')">📡 اتصال</button>
+            <button class="tab-btn" onclick="switchTab('messageTab')">💬 پیام متنی</button>
+            <button class="tab-btn" onclick="switchTab('mediaTab')">📷 ارسال عکس</button>
         </div>
 
-        <div id="connectedBox" class="hidden">
-            <h3>✅ متصل شد!</h3>
-            <p>شماره: <span id="phoneNum"></span></p>
-            <button onclick="logout()">خروج</button>
+        <div id="connectTab" class="content">
+            <div id="statusBox" class="status-badge disconnected-bg">وضعیت: قطع</div>
+            
+            <div id="connectionControls">
+                <input type="text" id="sessionId" placeholder="نام نشست (مثلا: my-bot)" value="main-session">
+                <button class="action-btn" onclick="startWhatsapp()">🚀 اتصال / دریافت QR</button>
+            </div>
+
+            <div id="qrContainer" class="hidden">
+                <p style="text-align:center;">با واتساپ اسکن کنید:</p>
+                <img id="qrImage" src="" alt="QR Code">
+            </div>
+
+            <div id="userInfo" class="hidden" style="text-align: center; margin-top: 20px;">
+                <h3>✅ متصل شد!</h3>
+                <p>شماره: <span id="phoneNum" dir="ltr">---</span></p>
+                <button class="btn-logout" onclick="logout()">خروج</button>
+            </div>
         </div>
+
+        <div id="messageTab" class="content hidden">
+            <h3>ارسال پیام متنی</h3>
+            <input type="text" id="msgPhone" placeholder="شماره موبایل (مثلا 98912...)" dir="ltr">
+            <textarea id="msgText" placeholder="متن پیام خود را بنویسید..."></textarea>
+            <button class="action-btn" onclick="sendMessage()">ارسال پیام 📤</button>
+        </div>
+
+        <div id="mediaTab" class="content hidden">
+            <h3>ارسال عکس</h3>
+            <input type="text" id="imgPhone" placeholder="شماره موبایل گیرنده" dir="ltr">
+            <input type="file" id="imgFile" accept="image/*">
+            <input type="text" id="imgCaption" placeholder="کپشن (توضیحات عکس)">
+            <button class="action-btn" onclick="sendImage()">آپلود و ارسال 🖼️</button>
+        </div>
+
     </div>
 
     <script>
@@ -51,70 +133,157 @@
 
         if (token) showDashboard();
 
+        // --- مدیریت تب‌ها ---
+        function switchTab(tabId) {
+            // مخفی کردن همه تب‌ها
+            ['connectTab', 'messageTab', 'mediaTab'].forEach(id => {
+                document.getElementById(id).classList.add('hidden');
+            });
+            // برداشتن کلاس active از دکمه‌ها
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+
+            // نمایش تب انتخاب شده
+            document.getElementById(tabId).classList.remove('hidden');
+            
+            // پیدا کردن دکمه مربوطه و فعال کردن آن (روش ساده)
+            const index = ['connectTab', 'messageTab', 'mediaTab'].indexOf(tabId);
+            document.querySelectorAll('.tab-btn')[index].classList.add('active');
+        }
+
+        // --- توابع Auth ---
         async function login() {
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
             
-            const res = await fetch(`${API_URL}/auth/login`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password })
-            });
+            try {
+                const res = await fetch(`${API_URL}/auth/login`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    localStorage.setItem('token', data.access_token);
+                    token = data.access_token;
+                    showDashboard();
+                } else alert('اطلاعات اشتباه است');
+            } catch(e) { alert('خطا در اتصال'); }
+        }
 
-            if (res.ok) {
-                const data = await res.json();
-                token = data.access_token;
-                localStorage.setItem('token', token);
-                showDashboard();
-            } else {
-                alert('ایمیل یا رمز اشتباه است');
-            }
+        async function signup() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            // لاجیک ثبت نام... (مشابه قبل)
+            fetch(`${API_URL}/auth/signup`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password })
+            }).then(r => r.ok ? alert('ثبت نام شد. حالا وارد شوید.') : alert('خطا'));
         }
 
         function showDashboard() {
             document.getElementById('loginSection').classList.add('hidden');
             document.getElementById('dashboardSection').classList.remove('hidden');
+            
+            // اگر قبلا سشن داشتیم، چکش کن
+            const savedSession = localStorage.getItem('savedSessionId');
+            if(savedSession) {
+                document.getElementById('sessionId').value = savedSession;
+                checkStatus(savedSession);
+            }
         }
 
+        // --- توابع واتساپ ---
         async function startWhatsapp() {
             const sessionId = document.getElementById('sessionId').value;
-            if(!sessionId) return alert('نام نشست را وارد کنید');
-
-            // 1. درخواست شروع
+            localStorage.setItem('savedSessionId', sessionId);
+            
+            updateStatusUI('waiting', 'در حال راه‌اندازی...');
+            
             await fetch(`${API_URL}/whatsapp/start`, {
                 method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify({ sessionId })
             });
 
-            // 2. نمایش باکس QR
-            document.getElementById('connectionBox').classList.add('hidden');
-            document.getElementById('qrBox').classList.remove('hidden');
-
-            // 3. شروع چک کردن وضعیت هر 2 ثانیه
-            refreshInterval = setInterval(() => checkStatus(sessionId), 2000);
+            if(refreshInterval) clearInterval(refreshInterval);
+            refreshInterval = setInterval(() => checkStatus(sessionId), 2000); // هر 2 ثانیه
         }
 
         async function checkStatus(sessionId) {
-            const res = await fetch(`${API_URL}/whatsapp/status/${sessionId}`, {
-                headers: { 'Authorization': `Bearer ${token}` }
+            try {
+                const res = await fetch(`${API_URL}/whatsapp/status/${sessionId}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await res.json();
+
+                if (data.status === 'CONNECTED') {
+                    clearInterval(refreshInterval);
+                    updateStatusUI('connected', '✅ متصل به واتساپ');
+                    document.getElementById('qrContainer').classList.add('hidden');
+                    document.getElementById('connectionControls').classList.add('hidden');
+                    document.getElementById('userInfo').classList.remove('hidden');
+                    document.getElementById('phoneNum').innerText = data.phone;
+                } 
+                else if (data.qr) {
+                    updateStatusUI('waiting', '📷 لطفا QR را اسکن کنید');
+                    document.getElementById('qrImage').src = data.qr;
+                    document.getElementById('qrContainer').classList.remove('hidden');
+                }
+            } catch (e) { console.log('Waiting...'); }
+        }
+
+        // --- ارسال پیام متنی ---
+        async function sendMessage() {
+            const phone = document.getElementById('msgPhone').value;
+            const message = document.getElementById('msgText').value;
+
+            if(!phone || !message) return alert('شماره و متن الزامی است');
+
+            const res = await fetch(`${API_URL}/whatsapp/send-text`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ phone, message })
             });
-            const data = await res.json();
 
-            if (data.qr) {
-                document.getElementById('qrImage').src = data.qr;
-                document.getElementById('statusText').innerText = "QR آماده اسکن";
+            if(res.ok) {
+                alert('✅ پیام ارسال شد');
+                document.getElementById('msgText').value = ''; // خالی کردن فیلد
+            } else {
+                alert('❌ خطا در ارسال پیام');
             }
+        }
 
-            if (data.status === 'CONNECTED') {
-                clearInterval(refreshInterval);
-                document.getElementById('qrBox').classList.add('hidden');
-                document.getElementById('connectedBox').classList.remove('hidden');
-                document.getElementById('phoneNum').innerText = data.phone;
+        // --- ارسال عکس (جدید) ---
+        async function sendImage() {
+            const phone = document.getElementById('imgPhone').value;
+            const caption = document.getElementById('imgCaption').value;
+            const fileInput = document.getElementById('imgFile');
+
+            if(!phone || fileInput.files.length === 0) return alert('شماره و فایل الزامی است');
+
+            const formData = new FormData();
+            formData.append('phone', phone);
+            formData.append('caption', caption);
+            formData.append('file', fileInput.files[0]); // فایل را اضافه می‌کنیم
+
+            // نکته: وقتی FormData می‌فرستیم، نباید Content-Type را دستی ست کنیم
+            const res = await fetch(`${API_URL}/whatsapp/upload-image`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` },
+                body: formData
+            });
+
+            if(res.ok) {
+                alert('✅ عکس آپلود و ارسال شد');
+            } else {
+                const err = await res.json();
+                alert('❌ خطا: ' + (err.message || 'مشکل در ارسال'));
             }
+        }
+
+        function updateStatusUI(type, text) {
+            const badge = document.getElementById('statusBox');
+            badge.className = 'status-badge ' + (type === 'connected' ? 'connected-bg' : type === 'waiting' ? 'waiting-bg' : 'disconnected-bg');
+            badge.innerText = text;
         }
 
         function logout() {
