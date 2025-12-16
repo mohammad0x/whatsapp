@@ -3,292 +3,517 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>پنل پیشرفته واتساپ</title>
+    <title>پنل جامع واتساپ (نسخه اصلاح شده)</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
-        body { font-family: Tahoma, sans-serif; background: #eef2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        :root {
+            --green-header: #00a884;
+            --bg-chat: #efeae2;
+            --msg-in: #ffffff;
+            --msg-out: #d9fdd3;
+            --sidebar-bg: #ffffff;
+        }
+
+        * { box-sizing: border-box; outline: none; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, sans-serif; 
+            margin: 0; background: #d1d7db; 
+            height: 100vh; overflow: hidden; 
+            display: flex; justify-content: center; align-items: center;
+        }
+
+        .hidden { display: none !important; }
+
+        /* --- کانتینر اصلی --- */
+        .app-container {
+            width: 100%; height: 100%; max-width: 1600px;
+            background: white; display: flex;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        /* --- سایدبار --- */
+        .sidebar {
+            width: 350px; display: flex; flex-direction: column;
+            border-left: 1px solid #e9edef; background: var(--sidebar-bg);
+            flex-shrink: 0;
+        }
+
+        .header {
+            height: 60px; background: #f0f2f5; padding: 10px 16px;
+            display: flex; align-items: center; justify-content: space-between;
+            border-bottom: 1px solid #e9edef;
+        }
+
+        .header-tools { display: flex; gap: 10px; }
+        .icon-btn {
+            font-size: 18px; color: #54656f; cursor: pointer;
+            background: none; border: none; padding: 8px; border-radius: 50%;
+        }
+        .icon-btn:hover { background-color: #e9edef; color: var(--green-header); }
+
+        .search-box {
+            background: #f0f2f5; padding: 8px 15px; margin: 10px;
+            border-radius: 8px; display: flex; align-items: center;
+        }
+        .search-box input { border: none; background: transparent; width: 100%; margin-right: 10px; }
+
+        .contact-list { flex: 1; overflow-y: auto; }
+        .contact-item {
+            display: flex; align-items: center; padding: 12px 15px;
+            cursor: pointer; border-bottom: 1px solid #f5f5f5; transition: 0.2s;
+        }
+        .contact-item:hover { background: #f5f6f6; }
+        .contact-item.active { background: #f0f2f5; }
+        .avatar {
+            width: 45px; height: 45px; border-radius: 50%;
+            background: #dfe5e7; color: white;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 20px; margin-left: 15px;
+        }
+
+        /* --- چت --- */
+        .chat-area {
+            flex: 1; display: flex; flex-direction: column;
+            background-color: var(--bg-chat);
+            background-image: url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png");
+            position: relative;
+        }
+
+        .messages-box {
+            flex: 1; overflow-y: auto; padding: 20px 50px;
+            display: flex; flex-direction: column; gap: 5px;
+        }
+
+        .message {
+            max-width: 60%; padding: 8px 12px; border-radius: 8px;
+            font-size: 14px; position: relative; line-height: 1.4;
+            box-shadow: 0 1px 1px rgba(0,0,0,0.1); word-wrap: break-word;
+        }
+        .msg-in { align-self: flex-start; background: var(--msg-in); border-top-right-radius: 0; }
+        .msg-out { align-self: flex-end; background: var(--msg-out); border-top-left-radius: 0; }
+        .msg-time { font-size: 10px; color: #999; text-align: left; margin-top: 4px; }
+
+        .chat-footer {
+            min-height: 62px; background: #f0f2f5; padding: 10px 15px;
+            display: flex; align-items: center; gap: 10px; position: relative;
+        }
+        .chat-input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid white; background: white; }
+
+        /* --- مدال‌ها --- */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); z-index: 9999; /* Z-Index بسیار بالا */
+            display: flex; align-items: center; justify-content: center;
+        }
+        .card {
+            background: white; padding: 25px; border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2); width: 400px;
+            max-width: 90%;
+        }
+        .btn-green {
+            background: var(--green-header); color: white; width: 100%;
+            padding: 10px; border: none; border-radius: 6px; cursor: pointer; margin-top: 10px;
+        }
+        .btn-close { background: #ccc; margin-top: 5px; color: #333; }
         
-        /* استایل کارت اصلی */
-        .card { 
-            background: white; 
-            padding: 0; /* پدینگ داخلی حذف شد تا تب‌ها بچسبند */
-            border-radius: 15px; 
-            box-shadow: 0 10px 25px rgba(0,0,0,0.1); 
-            width: 450px; 
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
+        textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; resize: vertical; }
+        input[type="text"], input[type="number"], input[type="email"], input[type="password"] {
+            width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; margin-bottom: 10px;
         }
-
-        /* استایل هدر و تب‌ها */
-        .tabs { display: flex; background: #f8f9fa; border-bottom: 1px solid #ddd; }
-        .tab-btn { 
-            flex: 1; 
-            padding: 15px; 
-            border: none; 
-            background: none; 
-            cursor: pointer; 
-            font-weight: bold; 
-            color: #666; 
-            transition: 0.3s;
-        }
-        .tab-btn:hover { background: #e9ecef; }
-        .tab-btn.active { 
-            background: white; 
-            color: #25D366; 
-            border-bottom: 3px solid #25D366; 
-        }
-
-        /* محتوای داخلی */
-        .content { padding: 2rem; }
-        .hidden { display: none; }
-
-        input, textarea { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; }
-        textarea { resize: vertical; min-height: 100px; font-family: Tahoma; }
-        
-        button.action-btn { 
-            width: 100%; padding: 12px; 
-            background: #25D366; color: white; 
-            border: none; border-radius: 8px; 
-            cursor: pointer; font-size: 16px; font-weight: bold;
-            transition: 0.2s;
-        }
-        button.action-btn:hover { background: #128C7E; transform: translateY(-2px); }
-        
-        .btn-logout { background: #e74c3c; margin-top: 10px; width: 100%; padding: 10px; color: white; border: none; border-radius: 8px; cursor: pointer; }
-
-        /* وضعیت و QR */
-        #qrImage { width: 200px; height: 200px; margin: 10px auto; display: block; border: 1px solid #eee; border-radius: 10px; }
-        .status-badge { 
-            text-align: center; padding: 10px; 
-            margin-bottom: 15px; border-radius: 8px; 
-            font-weight: bold; font-size: 14px;
-        }
-        .connected-bg { background: #d4edda; color: #155724; }
-        .disconnected-bg { background: #f8d7da; color: #721c24; }
-        .waiting-bg { background: #fff3cd; color: #856404; }
-
-        /* لاگین فرم */
-        #loginSection { padding: 2rem; text-align: center; }
+        label { font-weight: bold; display: block; margin-bottom: 5px; font-size: 14px; }
     </style>
 </head>
 <body>
 
-    <div id="loginSection" class="card">
-        <h2>🔐 ورود به سیستم</h2>
-        <input type="email" id="email" placeholder="ایمیل">
-        <input type="password" id="password" placeholder="رمز عبور">
-        <button class="action-btn" onclick="login()">ورود</button>
-        <button style="background:none; border:none; color:#3498db; margin-top:10px; cursor:pointer;" onclick="signup()">ثبت نام حساب جدید</button>
+    <div id="loginModal" class="modal-overlay">
+        <div class="card" style="text-align: center;">
+            <h2>🔐 ورود به سیستم</h2>
+            <input type="email" id="email" placeholder="ایمیل (admin@test.com)">
+            <input type="password" id="password" placeholder="رمز عبور">
+            <button class="btn-green" onclick="auth('login')">ورود</button>
+            <button class="btn-green" style="background:#3498db;" onclick="auth('signup')">ثبت نام</button>
+        </div>
     </div>
 
-    <div id="dashboardSection" class="card hidden">
-        
-        <div class="tabs">
-            <button class="tab-btn active" onclick="switchTab('connectTab')">📡 اتصال</button>
-            <button class="tab-btn" onclick="switchTab('messageTab')">💬 پیام متنی</button>
-            <button class="tab-btn" onclick="switchTab('mediaTab')">📷 ارسال عکس</button>
+    <div id="qrModal" class="modal-overlay hidden">
+        <div class="card" style="text-align: center;">
+            <h3>اتصال به واتساپ</h3>
+            <input type="text" id="sessionName" placeholder="نام نشست (مثلا main)" value="main">
+            <img id="qrImage" src="" style="width:200px; height:200px; display:none; margin:10px auto;">
+            <p id="qrStatus">روی دکمه زیر کلیک کنید</p>
+            <button class="btn-green" onclick="startSession()">دریافت QR</button>
+            <button class="btn-green btn-close" onclick="closeModal('qrModal')">بستن</button>
         </div>
+    </div>
 
-        <div id="connectTab" class="content">
-            <div id="statusBox" class="status-badge disconnected-bg">وضعیت: قطع</div>
+    <div id="bulkModal" class="modal-overlay hidden">
+        <div class="card">
+            <h3>📢 ارسال پیام انبوه</h3>
+            <label>شماره‌ها (هر خط یک شماره):</label>
+            <textarea id="bulkPhones" rows="5" placeholder="98912...\n98935..."></textarea>
             
-            <div id="connectionControls">
-                <input type="text" id="sessionId" placeholder="نام نشست (مثلا: my-bot)" value="main-session">
-                <button class="action-btn" onclick="startWhatsapp()">🚀 اتصال / دریافت QR</button>
+            <label>پیام:</label>
+            <textarea id="bulkMessage" rows="3" placeholder="متن پیام..."></textarea>
+            
+            <label>تاخیر بین پیام (ثانیه):</label>
+            <input type="number" id="bulkDelay" value="2">
+            
+            <button class="btn-green" onclick="sendBulk()">شروع ارسال</button>
+            <button class="btn-green btn-close" onclick="closeModal('bulkModal')">انصراف</button>
+        </div>
+    </div>
+
+    <div id="settingsModal" class="modal-overlay hidden">
+        <div class="card">
+            <h3>⚙️ تنظیمات ربات</h3>
+            <label>آدرس وب‌هوک (Webhook URL):</label>
+            <input type="text" id="webhookUrl" placeholder="https://your-site.com/api/webhook">
+            <button class="btn-green" onclick="setWebhook()">ذخیره تنظیمات</button>
+            <button class="btn-green btn-close" onclick="closeModal('settingsModal')">بستن</button>
+        </div>
+    </div>
+
+    <div id="fileUrlModal" class="modal-overlay hidden">
+        <div class="card">
+            <h3>📂 ارسال فایل از لینک</h3>
+            <label>لینک فایل (URL):</label>
+            <input type="text" id="fileUrlInput" placeholder="https://example.com/file.pdf">
+            <label>نام فایل:</label>
+            <input type="text" id="fileNameInput" placeholder="document.pdf">
+            <label>کپشن:</label>
+            <input type="text" id="fileCaptionInput" placeholder="توضیحات...">
+            <button class="btn-green" onclick="sendFileByUrl()">ارسال</button>
+            <button class="btn-green btn-close" onclick="closeModal('fileUrlModal')">بستن</button>
+        </div>
+    </div>
+
+    <div id="app" class="app-container hidden">
+        
+        <aside class="sidebar">
+            <div class="header">
+                <div class="avatar" style="background:var(--green-header);"><i class="fas fa-user"></i></div>
+                <div class="header-tools">
+                    <button class="icon-btn" onclick="openModal('bulkModal')" title="ارسال انبوه"><i class="fas fa-bullhorn"></i></button>
+                    <button class="icon-btn" onclick="openModal('settingsModal')" title="تنظیمات"><i class="fas fa-cog"></i></button>
+                    <button class="icon-btn" onclick="openModal('qrModal')" title="اتصال"><i class="fas fa-link"></i></button>
+                    <button class="icon-btn" onclick="logout()" title="خروج"><i class="fas fa-sign-out-alt" style="color:#d32f2f;"></i></button>
+                </div>
             </div>
 
-            <div id="qrContainer" class="hidden">
-                <p style="text-align:center;">با واتساپ اسکن کنید:</p>
-                <img id="qrImage" src="" alt="QR Code">
+            <div class="search-box">
+                <i class="fas fa-search" style="color:#999;"></i>
+                <input type="text" id="searchInput" placeholder="جستجو یا شماره جدید..." onkeyup="handleSearch(event)">
             </div>
 
-            <div id="userInfo" class="hidden" style="text-align: center; margin-top: 20px;">
-                <h3>✅ متصل شد!</h3>
-                <p>شماره: <span id="phoneNum" dir="ltr">---</span></p>
-                <button class="btn-logout" onclick="logout()">خروج</button>
+            <div class="contact-list" id="contactList">
+                <div style="padding:20px; text-align:center; color:#777;">در حال لود مخاطبین...</div>
             </div>
-        </div>
+        </aside>
 
-        <div id="messageTab" class="content hidden">
-            <h3>ارسال پیام متنی</h3>
-            <input type="text" id="msgPhone" placeholder="شماره موبایل (مثلا 98912...)" dir="ltr">
-            <textarea id="msgText" placeholder="متن پیام خود را بنویسید..."></textarea>
-            <button class="action-btn" onclick="sendMessage()">ارسال پیام 📤</button>
-        </div>
+        <main class="chat-area">
+            
+            <div id="welcomeScreen" style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:#666;">
+                <i class="fab fa-whatsapp" style="font-size:80px; margin-bottom:20px; color:#e9edef;"></i>
+                <h2>واتساپ هوشمند</h2>
+                <div id="connectionBadge" style="background:#ddd; padding:5px 15px; border-radius:20px; font-size:12px; margin-top:10px;">وضعیت: نامشخص</div>
+            </div>
 
-        <div id="mediaTab" class="content hidden">
-            <h3>ارسال عکس</h3>
-            <input type="text" id="imgPhone" placeholder="شماره موبایل گیرنده" dir="ltr">
-            <input type="file" id="imgFile" accept="image/*">
-            <input type="text" id="imgCaption" placeholder="کپشن (توضیحات عکس)">
-            <button class="action-btn" onclick="sendImage()">آپلود و ارسال 🖼️</button>
-        </div>
+            <div id="chatScreen" class="hidden" style="display:flex; flex-direction:column; height:100%;">
+                <div class="header">
+                    <div style="display:flex; align-items:center;">
+                        <div class="avatar"><i class="fas fa-user"></i></div>
+                        <div style="margin-right:10px;">
+                            <b id="chatName">مخاطب</b>
+                            <div id="chatNumber" style="font-size:12px; color:#666;">---</div>
+                        </div>
+                    </div>
+                </div>
 
+                <div id="messagesBox" class="messages-box"></div>
+
+                <div class="chat-footer">
+                    <button class="icon-btn" onclick="openModal('fileUrlModal')" title="ارسال فایل (لینک)"><i class="fas fa-file-alt"></i></button>
+                    
+                    <input type="file" id="imgInput" hidden accept="image/*" onchange="uploadImage(this)">
+                    <button class="icon-btn" onclick="document.getElementById('imgInput').click()" title="آپلود عکس"><i class="fas fa-camera"></i></button>
+
+                    <input type="text" id="msgInput" class="chat-input" placeholder="پیام..." onkeypress="if(event.key==='Enter') sendMessage()">
+                    <button class="icon-btn" onclick="sendMessage()"><i class="fas fa-paper-plane"></i></button>
+                </div>
+            </div>
+        </main>
     </div>
 
     <script>
         const API_URL = 'http://localhost:3000';
         let token = localStorage.getItem('token');
-        let refreshInterval;
+        let currentChat = null;
+        let activeSession = localStorage.getItem('lastSession') || 'main';
+        let refreshTimer = null;
 
-        if (token) showDashboard();
+        console.log("🚀 App Loaded. Token exists:", !!token);
 
-        // --- مدیریت تب‌ها ---
-        function switchTab(tabId) {
-            // مخفی کردن همه تب‌ها
-            ['connectTab', 'messageTab', 'mediaTab'].forEach(id => {
-                document.getElementById(id).classList.add('hidden');
-            });
-            // برداشتن کلاس active از دکمه‌ها
-            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+        if(token) init();
+        else console.log("🔒 No token found, showing Login Modal.");
 
-            // نمایش تب انتخاب شده
-            document.getElementById(tabId).classList.remove('hidden');
-            
-            // پیدا کردن دکمه مربوطه و فعال کردن آن (روش ساده)
-            const index = ['connectTab', 'messageTab', 'mediaTab'].indexOf(tabId);
-            document.querySelectorAll('.tab-btn')[index].classList.add('active');
-        }
+        // --- مدیریت مودال‌ها ---
+        function openModal(id) { document.getElementById(id).classList.remove('hidden'); }
+        function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
 
-        // --- توابع Auth ---
-        async function login() {
+        // --- Auth ---
+        async function auth(type) {
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
+            console.log(`🔐 Attempting ${type}...`);
             
             try {
-                const res = await fetch(`${API_URL}/auth/login`, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password })
+                const res = await fetch(`${API_URL}/auth/${type}`, {
+                    method:'POST', headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({email, password})
                 });
-                if (res.ok) {
-                    const data = await res.json();
-                    localStorage.setItem('token', data.access_token);
-                    token = data.access_token;
-                    showDashboard();
-                } else alert('اطلاعات اشتباه است');
-            } catch(e) { alert('خطا در اتصال'); }
-        }
-
-        async function signup() {
-            const email = document.getElementById('email').value;
-            const password = document.getElementById('password').value;
-            // لاجیک ثبت نام... (مشابه قبل)
-            fetch(`${API_URL}/auth/signup`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password })
-            }).then(r => r.ok ? alert('ثبت نام شد. حالا وارد شوید.') : alert('خطا'));
-        }
-
-        function showDashboard() {
-            document.getElementById('loginSection').classList.add('hidden');
-            document.getElementById('dashboardSection').classList.remove('hidden');
-            
-            // اگر قبلا سشن داشتیم، چکش کن
-            const savedSession = localStorage.getItem('savedSessionId');
-            if(savedSession) {
-                document.getElementById('sessionId').value = savedSession;
-                checkStatus(savedSession);
-            }
-        }
-
-        // --- توابع واتساپ ---
-        async function startWhatsapp() {
-            const sessionId = document.getElementById('sessionId').value;
-            localStorage.setItem('savedSessionId', sessionId);
-            
-            updateStatusUI('waiting', 'در حال راه‌اندازی...');
-            
-            await fetch(`${API_URL}/whatsapp/start`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({ sessionId })
-            });
-
-            if(refreshInterval) clearInterval(refreshInterval);
-            refreshInterval = setInterval(() => checkStatus(sessionId), 2000); // هر 2 ثانیه
-        }
-
-        async function checkStatus(sessionId) {
-            try {
-                const res = await fetch(`${API_URL}/whatsapp/status/${sessionId}`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                const data = await res.json();
-
-                if (data.status === 'CONNECTED') {
-                    clearInterval(refreshInterval);
-                    updateStatusUI('connected', '✅ متصل به واتساپ');
-                    document.getElementById('qrContainer').classList.add('hidden');
-                    document.getElementById('connectionControls').classList.add('hidden');
-                    document.getElementById('userInfo').classList.remove('hidden');
-                    document.getElementById('phoneNum').innerText = data.phone;
-                } 
-                else if (data.qr) {
-                    updateStatusUI('waiting', '📷 لطفا QR را اسکن کنید');
-                    document.getElementById('qrImage').src = data.qr;
-                    document.getElementById('qrContainer').classList.remove('hidden');
+                
+                if(res.ok) {
+                    if(type === 'login') {
+                        const d = await res.json();
+                        localStorage.setItem('token', d.access_token);
+                        token = d.access_token;
+                        console.log("✅ Login Success");
+                        init();
+                    } else alert('ثبت نام موفق. وارد شوید.');
+                } else {
+                    const err = await res.json();
+                    alert('خطا: ' + err.message);
                 }
-            } catch (e) { console.log('Waiting...'); }
-        }
-
-        // --- ارسال پیام متنی ---
-        async function sendMessage() {
-            const phone = document.getElementById('msgPhone').value;
-            const message = document.getElementById('msgText').value;
-
-            if(!phone || !message) return alert('شماره و متن الزامی است');
-
-            const res = await fetch(`${API_URL}/whatsapp/send-text`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({ phone, message })
-            });
-
-            if(res.ok) {
-                alert('✅ پیام ارسال شد');
-                document.getElementById('msgText').value = ''; // خالی کردن فیلد
-            } else {
-                alert('❌ خطا در ارسال پیام');
+            } catch(e) { 
+                console.error(e);
+                alert('خطای اتصال به سرور (مطمئن شوید Backend روشن است)'); 
             }
         }
 
-        // --- ارسال عکس (جدید) ---
-        async function sendImage() {
-            const phone = document.getElementById('imgPhone').value;
-            const caption = document.getElementById('imgCaption').value;
-            const fileInput = document.getElementById('imgFile');
-
-            if(!phone || fileInput.files.length === 0) return alert('شماره و فایل الزامی است');
-
-            const formData = new FormData();
-            formData.append('phone', phone);
-            formData.append('caption', caption);
-            formData.append('file', fileInput.files[0]); // فایل را اضافه می‌کنیم
-
-            // نکته: وقتی FormData می‌فرستیم، نباید Content-Type را دستی ست کنیم
-            const res = await fetch(`${API_URL}/whatsapp/upload-image`, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}` },
-                body: formData
-            });
-
-            if(res.ok) {
-                alert('✅ عکس آپلود و ارسال شد');
-            } else {
-                const err = await res.json();
-                alert('❌ خطا: ' + (err.message || 'مشکل در ارسال'));
-            }
-        }
-
-        function updateStatusUI(type, text) {
-            const badge = document.getElementById('statusBox');
-            badge.className = 'status-badge ' + (type === 'connected' ? 'connected-bg' : type === 'waiting' ? 'waiting-bg' : 'disconnected-bg');
-            badge.innerText = text;
+        function init() {
+            closeModal('loginModal');
+            document.getElementById('app').classList.remove('hidden');
+            checkConnection();
+            loadContacts();
+            setInterval(checkConnection, 5000);
         }
 
         function logout() {
             localStorage.removeItem('token');
             location.reload();
+        }
+
+        // --- Whatsapp Connect ---
+        async function startSession() {
+            const sid = document.getElementById('sessionName').value;
+            activeSession = sid;
+            localStorage.setItem('lastSession', sid);
+            document.getElementById('qrStatus').innerText = "در حال ساخت QR...";
+            
+            try {
+                await fetch(`${API_URL}/whatsapp/start`, {
+                    method:'POST', headers: getHeaders(), body:JSON.stringify({sessionId: sid})
+                });
+                checkConnection();
+            } catch(e) { console.error("Start Session Error:", e); }
+        }
+
+        async function checkConnection() {
+            try {
+                const res = await fetch(`${API_URL}/whatsapp/status/${activeSession}`, {headers: getHeaders()});
+                if(res.status === 401) return logout(); // توکن منقضی شده
+
+                const data = await res.json();
+                const badge = document.getElementById('connectionBadge');
+                
+                if(data.status === 'CONNECTED') {
+                    badge.innerText = `🟢 متصل: ${data.phone}`;
+                    badge.style.background = "#d4edda";
+                    closeModal('qrModal');
+                } else if(data.qr) {
+                    document.getElementById('qrImage').src = data.qr;
+                    document.getElementById('qrImage').style.display = 'block';
+                    document.getElementById('qrStatus').innerText = "اسکن کنید";
+                    // اگر کاربر مودال را بسته، خودکار بازش نکنیم که مزاحم شود
+                    // مگر اینکه خودش باز کرده باشد
+                }
+            } catch(e){}
+        }
+
+        // --- Contacts ---
+        async function loadContacts() {
+            try {
+                const res = await fetch(`${API_URL}/whatsapp/contacts`, {headers: getHeaders()});
+                const contacts = await res.json();
+                const list = document.getElementById('contactList');
+                list.innerHTML = '';
+                contacts.forEach(c => {
+                    const div = document.createElement('div');
+                    div.className = `contact-item ${currentChat===(c.phone||c.number) ? 'active' : ''}`;
+                    div.onclick = () => openChat(c.phone||c.number, c.name);
+                    div.innerHTML = `
+                        <div class="avatar"><i class="fas fa-user"></i></div>
+                        <div style="margin-right:15px;">
+                            <div style="font-weight:bold;">${c.name || c.phone || c.number}</div>
+                            <div style="font-size:12px; color:#777;">${c.lastMessage || ''}</div>
+                        </div>
+                    `;
+                    list.appendChild(div);
+                });
+            } catch(e){}
+        }
+
+        function handleSearch(e) {
+            const val = e.target.value;
+            document.querySelectorAll('.contact-item').forEach(item => {
+                item.style.display = item.innerText.includes(val) ? 'flex' : 'none';
+            });
+            if(e.key === 'Enter' && val.length > 5) {
+                openChat(val, val);
+                e.target.value = '';
+            }
+        }
+
+        // --- Chat ---
+        async function openChat(phone, name) {
+            currentChat = phone;
+            document.getElementById('welcomeScreen').classList.add('hidden');
+            document.getElementById('chatScreen').classList.remove('hidden');
+            document.getElementById('chatName').innerText = name || phone;
+            document.getElementById('chatNumber').innerText = phone;
+            
+            if(refreshTimer) clearInterval(refreshTimer);
+            loadMessages();
+            refreshTimer = setInterval(loadMessages, 3000);
+        }
+
+        async function loadMessages() {
+            if(!currentChat) return;
+            try {
+                const res = await fetch(`${API_URL}/whatsapp/history/${currentChat}`, {headers: getHeaders()});
+                const msgs = await res.json();
+                const box = document.getElementById('messagesBox');
+                if(box.childElementCount !== msgs.length) {
+                    box.innerHTML = '';
+                    msgs.forEach(m => {
+                        const div = document.createElement('div');
+                        div.className = `message ${m.isFromMe ? 'msg-out' : 'msg-in'}`;
+                        let content = m.text;
+                        if(m.type === 'image') content = '📷 تصویر';
+                        if(m.type === 'document') content = '📂 فایل';
+                        div.innerHTML = `${content} <div class="msg-time">${new Date(m.createdAt).toLocaleTimeString('fa-IR')}</div>`;
+                        box.appendChild(div);
+                    });
+                    box.scrollTop = box.scrollHeight;
+                }
+            } catch(e){}
+        }
+
+        async function sendMessage() {
+            const text = document.getElementById('msgInput').value;
+            if(!text || !currentChat) return;
+            
+            // نمایش موقت
+            const box = document.getElementById('messagesBox');
+            const tmp = document.createElement('div');
+            tmp.className = 'message msg-out';
+            tmp.innerHTML = `${text} <i class="fas fa-clock" style="font-size:10px;"></i>`;
+            box.appendChild(tmp);
+            box.scrollTop = box.scrollHeight;
+            document.getElementById('msgInput').value = '';
+
+            await fetch(`${API_URL}/whatsapp/send-text`, {
+                method:'POST', headers: getHeaders(),
+                body: JSON.stringify({phone: currentChat, message: text})
+            });
+            loadMessages();
+        }
+
+        // --- 1. آپلود عکس (Direct Upload) ---
+        async function uploadImage(input) {
+            const file = input.files[0];
+            if(!file || !currentChat) return;
+            
+            const form = new FormData();
+            form.append('phone', currentChat);
+            form.append('file', file);
+            form.append('caption', '');
+
+            console.log("📤 Uploading image...");
+            
+            // ⚠️ نکته مهم: اینجا نباید Content-Type ست کنیم
+            const res = await fetch(`${API_URL}/whatsapp/upload-image`, {
+                method:'POST', headers: {'Authorization': `Bearer ${token}`}, body: form
+            });
+            
+            if(res.ok) alert('عکس آپلود شد');
+            else alert('خطا در آپلود عکس');
+
+            input.value = '';
+            loadMessages();
+        }
+
+        // --- 2. ارسال فایل (Link) ---
+        async function sendFileByUrl() {
+            const fileUrl = document.getElementById('fileUrlInput').value;
+            const fileName = document.getElementById('fileNameInput').value;
+            const caption = document.getElementById('fileCaptionInput').value;
+
+            if(!fileUrl || !currentChat) return alert('لینک الزامی است');
+
+            await fetch(`${API_URL}/whatsapp/send-file`, {
+                method:'POST', headers: getHeaders(),
+                body: JSON.stringify({
+                    phone: currentChat,
+                    fileUrl: fileUrl,
+                    fileName: fileName || 'file',
+                    caption: caption
+                })
+            });
+            closeModal('fileUrlModal');
+            alert('درخواست ارسال فایل ثبت شد');
+            loadMessages();
+        }
+
+        // --- 3. ارسال انبوه (Bulk) ---
+        async function sendBulk() {
+            const textPhones = document.getElementById('bulkPhones').value;
+            const message = document.getElementById('bulkMessage').value;
+            const delay = document.getElementById('bulkDelay').value;
+
+            // جدا کردن شماره‌ها با خط جدید یا کاما
+            const phones = textPhones.split(/[\n,]+/).map(p => p.trim()).filter(p => p.length > 5);
+            
+            if(phones.length === 0 || !message) return alert('شماره و متن الزامی است');
+
+            if(!confirm(`آیا مطمئنید که می‌خواهید به ${phones.length} نفر پیام دهید؟`)) return;
+
+            await fetch(`${API_URL}/whatsapp/send-bulk`, {
+                method:'POST', headers: getHeaders(),
+                body: JSON.stringify({ phones, message, delay: parseInt(delay) })
+            });
+            
+            closeModal('bulkModal');
+            alert('ارسال انبوه شروع شد!');
+        }
+
+        // --- 4. تنظیم وب‌هوک ---
+        async function setWebhook() {
+            const url = document.getElementById('webhookUrl').value;
+            if(!url) return alert('آدرس الزامی است');
+
+            const res = await fetch(`${API_URL}/whatsapp/webhook`, {
+                method:'POST', headers: getHeaders(),
+                body: JSON.stringify({ url })
+            });
+            
+            if(res.ok) alert('وب‌هوک با موفقیت تنظیم شد');
+            else alert('خطا در تنظیم وب‌هوک');
+            closeModal('settingsModal');
+        }
+
+        function getHeaders() {
+            return {'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`};
         }
     </script>
 </body>
