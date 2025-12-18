@@ -1,6 +1,7 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
-import makeWASocket, { DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys';
-import * as QRCode from 'qrcode';
+import { Injectable, OnModuleInit, NotFoundException } from '@nestjs/common';
+import makeWASocket, { DisconnectReason, useMultiFileAuthState, jidDecode } from '@whiskeysockets/baileys';
+import * as QRCode from 'qrcode'; 
+import * as qrcodeTerminal from 'qrcode-terminal';
 import pino from 'pino';
 import * as fs from 'fs';
 import axios from 'axios';
@@ -17,33 +18,35 @@ export class WhatsappService implements OnModuleInit {
     private chatbotService: ChatbotService
   ) {}
 
-  // 🔄 شروع برنامه
   async onModuleInit() {
     const authDir = 'auth_info';
-    if (fs.existsSync(authDir)) {
-      const folders = fs.readdirSync(authDir);
-      for (const sessionId of folders) {
-        if(fs.existsSync(`${authDir}/${sessionId}/creds.json`)) {
-             console.log(`🔄 Recovering: ${sessionId}`);
-             await this.createSession(sessionId, 0, false);
-        }
+    if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
+
+    const folders = fs.readdirSync(authDir);
+    for (const sessionId of folders) {
+      if(fs.existsSync(`${authDir}/${sessionId}/creds.json`)) {
+           console.log(`🔄 Recovering Session: ${sessionId}`);
+           await this.createSession(sessionId, 0, false);
       }
     }
   }
 
-  // 📊 وضعیت
   async getSessionStatus(sessionId: string, userId: number) {
     const sock = this.sessions.get(sessionId);
-    if(sock?.user) return { status: 'CONNECTED', qr: null, phone: sock.user.id.split(':')[0] };
+    if(sock?.user) return { status: 'CONNECTED', qr: null, phone: sock.user.id.split(':')[0], sessionId };
     
     const qr = this.qrCodes.get(sessionId);
-    if (qr) return { status: 'SCAN_QR', qr };
+    if (qr) return { status: 'SCAN_QR', qr, sessionId };
 
-    return { status: 'INITIALIZING', qr: null };
+    const sessionRecord = await this.prisma.session.findUnique({ where: { id: sessionId } });
+    if (!sessionRecord) return { status: 'NOT_CREATED', message: 'Please start session first', sessionId };
+
+    return { status: 'DISCONNECTED', qr: null, sessionId };
   }
 
-  // 🔥 ساخت اتصال
   async createSession(sessionId: string, userId: number, isNew = true) {
+    if (this.sessions.has(sessionId)) return { message: 'Already active', sessionId };
+
     const authFolder = `auth_info/${sessionId}`;
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
@@ -51,7 +54,9 @@ export class WhatsappService implements OnModuleInit {
       auth: state,
       logger: pino({ level: 'silent' }) as any, 
       connectTimeoutMs: 60000,
-      browser: ['Whatsapp Panel', 'Chrome', '1.0.0'],
+      printQRInTerminal: false,
+      browser: ['Whatsapp 360 Clone', 'Chrome', '1.0.0'],
+      retryRequestDelayMs: 5000,
     });
 
     this.sessions.set(sessionId, sock);
@@ -60,25 +65,33 @@ export class WhatsappService implements OnModuleInit {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        console.log(`📷 Scan QR for: ${sessionId}`);
+        console.log(`\n📷 Scan QR Code for ${sessionId}:`);
+        qrcodeTerminal.generate(qr, { small: true });
         const qrImage = await QRCode.toDataURL(qr);
         this.qrCodes.set(sessionId, qrImage);
-        if (isNew) await this.saveSessionToDb(sessionId, 'SCAN_QR', userId);
+        if (userId !== 0) await this.saveSessionToDb(sessionId, 'SCAN_QR', userId);
       }
 
       if (connection === 'open') {
         console.log(`✅ Session ${sessionId} CONNECTED!`);
         this.qrCodes.delete(sessionId);
         const myPhone = sock.user?.id?.split(':')[0];
-        if (isNew) await this.saveSessionToDb(sessionId, 'CONNECTED', userId, myPhone);
+        
+        if (userId !== 0) await this.saveSessionToDb(sessionId, 'CONNECTED', userId, myPhone);
+        else await this.prisma.session.update({ where: { id: sessionId }, data: { status: 'CONNECTED', phone: myPhone } }).catch(() => {});
       }
       
       if (connection === 'close') {
-          const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
+          const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+          const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+          this.qrCodes.delete(sessionId); 
+
           if (shouldReconnect) {
-              setTimeout(() => this.createSession(sessionId, userId, isNew), 3000);
+              // console.log(`⚠️ Reconnecting ${sessionId}...`);
+              this.sessions.delete(sessionId);
+              setTimeout(() => this.createSession(sessionId, userId, false), 3000);
           } else {
-              console.log(`❌ Session ${sessionId} Logged Out.`);
+              console.log(`❌ Logged out ${sessionId}`);
               this.sessions.delete(sessionId);
               try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch(e) {}
               await this.prisma.session.update({ where: { id: sessionId }, data: { status: 'DISCONNECTED' } }).catch(() => {});
@@ -88,200 +101,202 @@ export class WhatsappService implements OnModuleInit {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // 📩 مدیریت پیام‌های دریافتی (اصلاح شده برای رفع خطای TS)
-    // 📩 مدیریت پیام‌ها (تست مستقیم و بدون واسطه)
+// 📩 دریافت پیام (نسخه بدون باگ TypeScript)
     sock.ev.on('messages.upsert', async (m) => {
       try {
         const msg = m.messages[0];
-        if (!msg.message) return;
-        const senderJid = msg.key.remoteJid;
-        if (!senderJid) return;
+        if (!msg.message || msg.key.fromMe) return; 
 
-        // فقط پیام‌های متنی
-        const text = msg.message.conversation || 
-                     msg.message.extendedTextMessage?.text || '';
+        let senderJid = msg.key.remoteJid;
+        if (!senderJid || senderJid === 'status@broadcast') return;
 
-        if (!text) return; // اگر عکس یا چیز دیگری بود فعلا کاری نداریم
+        // 🕵️ تشخیص نوع پیام
+        // از ?. استفاده می‌کنیم تا اگر خاصیتی نبود، ارور ندهد
+        const messageType = Object.keys(msg.message)[0];
+        let text = '';
+        let type = 'text';
 
-        const isFromMe = msg.key.fromMe;
-        console.log(`🔍 [DEBUG] Msg: "${text}" | FromMe: ${isFromMe} | JID: ${senderJid}`);
-
-        // اگر از طرف خودم بود، بیخیال شو
-        if (isFromMe) return;
-
-        // --- تست حیاتی: پاسخ مستقیم بدون شرط ---
-        console.log('🚀 [ACTION] Attempting DIRECT REPLY...');
-
-        try {
-            // ۱. ارسال وضعیت تایپ (تست اتصال)
-            await sock.sendPresenceUpdate('composing', senderJid);
-            
-            // ۲. ارسال مستقیم پیام (بدون استفاده از ChatbotService)
-            await sock.sendMessage(senderJid, { 
-                text: `✅ پیام شما رسید!\nمتن: ${text}\n(این یک پیام تست مستقیم است)` 
-            });
-            
-            console.log('✅ [SUCCESS] Direct reply sent!');
-            
-        } catch (sendError) {
-            console.error('❌ [SEND ERROR] Failed to send message:', sendError);
+        if (messageType === 'conversation') {
+            text = msg.message.conversation || '';
+        } else if (messageType === 'extendedTextMessage') {
+            text = msg.message.extendedTextMessage?.text || '';
+        } else if (messageType === 'imageMessage') {
+            type = 'image';
+            text = msg.message.imageMessage?.caption || '[Photo]';
+        } else if (messageType === 'videoMessage') {
+            type = 'video';
+            text = msg.message.videoMessage?.caption || '[Video]';
+        } else if (messageType === 'documentMessage') {
+            type = 'document';
+            text = msg.message.documentMessage?.caption || msg.message.documentMessage?.fileName || '[File]';
+        } else {
+            // اگر نوع پیام چیز دیگری بود (مثلا استیکر)، فعلاً نادیده بگیر یا لاگ کن
+            // console.log('Unknown message type:', messageType);
+            return; 
         }
 
+        // تمیز کردن شماره
+        const senderClean = senderJid.split('@')[0];
+
+        // Duplicate Check
+        const recentDuplicate = await this.prisma.message.findFirst({
+            where: {
+                sessionId,
+                text, 
+                sender: senderClean,
+                createdAt: { gte: new Date(Date.now() - 2000) } 
+            }
+        });
+
+        if (recentDuplicate) return;
+
+        console.log(`📩 New ${type} from ${senderClean}: ${text}`);
+
+        // ذخیره در دیتابیس
+        const savedMsg = await this.prisma.message.create({
+            data: {
+                text: text,
+                sender: senderClean,
+                receiver: 'ME',
+                isFromMe: false,
+                type: type,
+                sessionId: sessionId
+            }
+        });
+
+        // ارسال وب‌هوک
+        await this.triggerWebhook(sessionId, {
+            event: 'message.received',
+            data: {
+                id: savedMsg.id,
+                wa_id: msg.key.id,
+                from: senderClean,
+                type: type,
+                body: text,
+                timestamp: Math.floor(Date.now() / 1000),
+                pushName: msg.pushName || ''
+            }
+        });
+
       } catch (error) {
-          console.error('❌ [CRITICAL ERROR] Inside Handler:', error);
+          console.error('Error handling message:', error.message);
       }
     });
+
+    return { message: 'Session started', sessionId };
   }
 
-  // 🚀 ارسال پیام متنی
+  private async triggerWebhook(sessionId: string, payload: any) {
+      try {
+          const session = await this.prisma.session.findUnique({ 
+              where: { id: sessionId },
+              select: { webhookUrl: true } 
+          });
+
+          if (session?.webhookUrl) {
+              // لاگ کوتاه و تمیز
+              console.log(`🚀 Webhook -> ${session.webhookUrl} [${payload.data.from}]`);
+              await axios.post(session.webhookUrl, payload, { timeout: 5000 });
+          }
+      } catch (error) {
+          // فقط اگر خطا داد لاگ بگیر
+          console.error(`❌ Webhook Error: ${error.message}`);
+      }
+  }
+
+  // ... (سایر متدها: setWebhook, sendTextMessage, etc بدون تغییر)
+  async setWebhook(sessionId: string, url: string, userId: number) {
+    const session = await this.prisma.session.findUnique({ where: { id: sessionId }});
+    if (!session) {
+         await this.prisma.session.create({ data: { id: sessionId, userId, status: 'DISCONNECTED', webhookUrl: url } });
+    } else {
+         await this.prisma.session.update({ where: { id: sessionId }, data: { webhookUrl: url } });
+    }
+    return { message: 'Webhook updated successfully', url };
+  }
+
   async sendTextMessage(sessionId: string, phone: string, message: string, userId: number) {
     let sock = this.sessions.get(sessionId);
     const formattedPhone = phone.replace(/\D/g, '').replace(/^0/, '98');
     const jid = `${formattedPhone}@s.whatsapp.net`;
 
-    try {
-        if (!sock) {
-             await this.createSession(sessionId, userId, false);
-             await new Promise(r => setTimeout(r, 2000));
-             sock = this.sessions.get(sessionId);
-        }
-        await this.waitForConnection(sock);
-        await sock.sendMessage(jid, { text: message });
-
-    } catch (error) {
-        console.warn(`⚠️ Retry sending...`);
-        this.sessions.delete(sessionId);
-        await this.createSession(sessionId, userId, false);
-        await new Promise(r => setTimeout(r, 4000));
-        sock = this.sessions.get(sessionId);
-        await this.waitForConnection(sock);
-        await sock.sendMessage(jid, { text: message });
+    if (!sock) {
+         const exists = await this.prisma.session.findUnique({ where: { id: sessionId }});
+         if(!exists) throw new NotFoundException('Session not found.');
+         await this.createSession(sessionId, userId, false);
+         await new Promise(r => setTimeout(r, 3000));
+         sock = this.sessions.get(sessionId);
     }
+    if (!sock) throw new Error('Could not connect.');
+
+    await this.waitForConnection(sock);
+    await sock.sendMessage(jid, { text: message });
 
     await this.prisma.message.create({
         data: { text: message, sender: 'ME', receiver: formattedPhone, isFromMe: true, type: 'text', sessionId }
     });
     return { status: 'sent', phone: formattedPhone };
   }
-
-  // 📷 ارسال عکس
+  
   async sendImageBuffer(sessionId: string, phone: string, fileBuffer: Buffer, caption: string, userId: number) {
-    let sock = this.sessions.get(sessionId);
-    const formattedPhone = phone.replace(/\D/g, '').replace(/^0/, '98');
-    const jid = `${formattedPhone}@s.whatsapp.net`;
-
-    if (!Buffer.isBuffer(fileBuffer) || fileBuffer.length === 0) throw new Error('File Error');
-
-    try {
-        if (!sock) {
-             await this.createSession(sessionId, userId, false);
-             await new Promise(r => setTimeout(r, 2000));
-             sock = this.sessions.get(sessionId);
-        }
-        await this.waitForConnection(sock);
-        await sock.sendMessage(jid, { image: fileBuffer, caption, mimetype: 'image/jpeg' });
-
-    } catch (error) {
-        console.warn(`⚠️ Retry Image...`);
-        this.sessions.delete(sessionId);
-        await this.createSession(sessionId, userId, false);
-        await new Promise(r => setTimeout(r, 5000));
-        sock = this.sessions.get(sessionId);
-        await this.waitForConnection(sock);
-        await sock.sendMessage(jid, { image: fileBuffer, caption, mimetype: 'image/jpeg' });
-    }
-
-    await this.prisma.message.create({
-        data: { text: caption || '[IMAGE]', sender: 'ME', receiver: formattedPhone, isFromMe: true, type: 'image', sessionId }
-    });
-    return { status: 'sent', type: 'image' };
+      let sock = this.sessions.get(sessionId);
+      const formattedPhone = phone.replace(/\D/g, '').replace(/^0/, '98');
+      const jid = `${formattedPhone}@s.whatsapp.net`;
+      if (!sock) { await this.createSession(sessionId, userId, false); await new Promise(r => setTimeout(r, 3000)); sock = this.sessions.get(sessionId); }
+      await this.waitForConnection(sock);
+      await sock.sendMessage(jid, { image: fileBuffer, caption, mimetype: 'image/jpeg' });
+      await this.prisma.message.create({ data: { text: caption || '[IMAGE]', sender: 'ME', receiver: formattedPhone, isFromMe: true, type: 'image', sessionId } });
+      return { status: 'sent', type: 'image' };
   }
 
-  // 📂 ارسال فایل
   async sendDocumentMessage(sessionId: string, phone: string, fileUrl: string, fileName: string, caption: string, userId: number) {
-    let sock = this.sessions.get(sessionId);
-    const formattedPhone = phone.replace(/\D/g, '').replace(/^0/, '98');
-    const jid = `${formattedPhone}@s.whatsapp.net`;
-
-    let buffer: Buffer;
-    let mimetype: string = 'application/octet-stream';
-
-    try {
-        if (fileUrl.startsWith('http')) {
-            const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-            buffer = Buffer.from(response.data, 'binary');
-            mimetype = response.headers['content-type'] || 'application/pdf';
-        } else {
-            if (!fs.existsSync(fileUrl)) throw new Error(`File not found: ${fileUrl}`);
-            buffer = fs.readFileSync(fileUrl);
-        }
-    } catch (e) { throw new Error(e.message); }
-
-    try {
-        if (!sock) {
-             await this.createSession(sessionId, userId, false);
-             await new Promise(r => setTimeout(r, 2000));
-             sock = this.sessions.get(sessionId);
-        }
-        await this.waitForConnection(sock);
-        await sock.sendMessage(jid, { document: buffer, mimetype, fileName, caption });
-
-    } catch (error) {
-        this.sessions.delete(sessionId);
-        await this.createSession(sessionId, userId, false);
-        await new Promise(r => setTimeout(r, 5000));
-        sock = this.sessions.get(sessionId);
-        await this.waitForConnection(sock);
-        await sock.sendMessage(jid, { document: buffer, mimetype, fileName, caption });
-    }
-
-    await this.prisma.message.create({
-        data: { text: caption || `[FILE: ${fileName}]`, sender: 'ME', receiver: formattedPhone, isFromMe: true, type: 'document', sessionId }
-    });
-    return { status: 'success' };
+      let sock = this.sessions.get(sessionId);
+      const formattedPhone = phone.replace(/\D/g, '').replace(/^0/, '98');
+      const jid = `${formattedPhone}@s.whatsapp.net`;
+      let buffer: Buffer; let mimetype: string = 'application/octet-stream';
+      try {
+          if (fileUrl.startsWith('http')) {
+              const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+              buffer = Buffer.from(response.data, 'binary');
+              mimetype = response.headers['content-type'] || mimetype;
+          } else {
+              if (!fs.existsSync(fileUrl)) throw new Error(`File not found: ${fileUrl}`);
+              buffer = fs.readFileSync(fileUrl);
+          }
+      } catch (e) { throw new Error(e.message); }
+      if (!sock) { await this.createSession(sessionId, userId, false); await new Promise(r => setTimeout(r, 3000)); sock = this.sessions.get(sessionId); }
+      await this.waitForConnection(sock);
+      await sock.sendMessage(jid, { document: buffer, mimetype, fileName, caption });
+      await this.prisma.message.create({ data: { text: caption || `[FILE: ${fileName}]`, sender: 'ME', receiver: formattedPhone, isFromMe: true, type: 'document', sessionId } });
+      return { status: 'success' };
   }
 
-  // --- ابزارها ---
   async getContacts(sessionId: string) {
-    const messages = await this.prisma.message.findMany({
-        where: { sessionId }, orderBy: { createdAt: 'desc' }, distinct: ['sender', 'receiver']
-    });
-    const contacts = new Map();
-    messages.forEach(msg => {
-        const p = msg.isFromMe ? msg.receiver : msg.sender;
-        if (p !== 'ME' && !contacts.has(p)) contacts.set(p, { phone: p, lastMessage: msg.text });
-    });
-    return Array.from(contacts.values());
+      const messages = await this.prisma.message.findMany({ where: { sessionId }, orderBy: { createdAt: 'desc' }, distinct: ['sender', 'receiver'] });
+      const contacts = new Map();
+      messages.forEach(msg => { const p = msg.isFromMe ? msg.receiver : msg.sender; if (p !== 'ME' && !contacts.has(p)) contacts.set(p, { phone: p, lastMessage: msg.text }); });
+      return Array.from(contacts.values());
   }
 
   async getChatHistory(sessionId: string, phone: string) {
-    const clean = phone.replace(/\D/g, ''); 
-    return this.prisma.message.findMany({
-        where: { sessionId, OR: [{ sender: clean }, { receiver: clean }] },
-        orderBy: { createdAt: 'asc' }
-    });
-  }
-
-  async setWebhook(sessionId: string, url: string, userId: number) {
-    await this.prisma.session.update({ where: { id: sessionId }, data: { webhookUrl: url } });
-    return { message: 'OK' };
-  }
-
-  async getSessionIdByUser(userId: number) {
-    const s = await this.prisma.session.findFirst({ where: { userId } });
-    return s ? s.id : 'main';
+      const clean = phone.replace(/\D/g, ''); 
+      return this.prisma.message.findMany({ where: { sessionId, OR: [{ sender: clean }, { receiver: clean }] }, orderBy: { createdAt: 'asc' } });
   }
 
   private async saveSessionToDb(id: string, status: string, userId: number, phone?: string) {
     if(userId === 0) return;
-    try { await this.prisma.session.upsert({ where: { id }, update: { status, phone }, create: { id, status, phone, userId } }); } catch(e){}
+    try { 
+        await this.prisma.session.upsert({ where: { id }, update: { status, phone }, create: { id, status, phone, userId } }); 
+    } catch(e) {}
   }
 
   private async waitForConnection(sock: any): Promise<void> {
     if (sock?.user && sock?.ws?.isOpen) return;
-    for(let i=0; i<20; i++) {
+    let attempts = 0;
+    while (attempts < 10) {
         if (sock?.user && sock?.ws?.isOpen) return;
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 500));
+        attempts++;
     }
     throw new Error('Connection timed out');
   }
