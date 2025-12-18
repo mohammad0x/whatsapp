@@ -1,13 +1,11 @@
-import { Body, Controller, UseInterceptors, UploadedFile, Get, Param, Post, UseGuards, Request, BadRequestException } from '@nestjs/common';
+import { Body, Controller, UseInterceptors, UploadedFile, Get, Param, Post, UseGuards, Request, BadRequestException, Delete } from '@nestjs/common';
 import { WhatsappService } from './whatsapp.service';
 import { ApiBearerAuth, ApiConsumes, ApiBody, ApiOperation, ApiTags, ApiProperty } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FileInterceptor } from '@nestjs/platform-express'; 
+import { PrismaService } from '../prisma/prisma.service'; // ✅ ایمپورت شده
 
-// ✅ اصلاح DTO: حذف فیلد sessionId چون اتوماتیک است
-class StartSessionDto {
-  // فعلاً خالی، شاید بعداً تنظیمات خاصی بخواهید اضافه کنید
-}
+class StartSessionDto {}
 
 class SendTextDto {
   @ApiProperty({ description: 'شماره موبایل گیرنده (مثال: 98912...)' })
@@ -53,23 +51,24 @@ class SetWebhookDto {
 @UseGuards(JwtAuthGuard)
 @Controller('whatsapp')
 export class WhatsappController {
-  constructor(private readonly whatsappService: WhatsappService) {}
+  // ✅ فیکس: اضافه کردن private readonly prisma: PrismaService
+  constructor(
+    private readonly whatsappService: WhatsappService,
+    private readonly prisma: PrismaService 
+  ) {}
 
-  // 🛠️ تابع کمکی برای ساخت نام استاندارد سشن
   private getSessionId(req: any): string {
     return `session_${req.user.userId}`;
   }
 
-  // 🚀 شروع نشست (اتوماتیک)
   @Post('start')
   @ApiOperation({ summary: 'ساخت و روشن کردن ربات برای کاربر جاری' })
   async startSession(@Body() body: StartSessionDto, @Request() req) {
     const userId = req.user.userId;
-    const sessionId = this.getSessionId(req); // session_12
+    const sessionId = this.getSessionId(req);
     return this.whatsappService.createSession(sessionId, userId);
   }
 
-  // 📊 وضعیت (بدون نیاز به ورودی)
   @Get('status')
   @ApiOperation({ summary: 'بررسی وضعیت اتصال من و دریافت QR کد' })
   async getStatus(@Request() req) {
@@ -78,7 +77,6 @@ export class WhatsappController {
     return this.whatsappService.getSessionStatus(sessionId, userId);
   }
 
-  // 📩 ارسال متن
   @Post('send-text')
   @ApiOperation({ summary: 'ارسال پیام متنی' })
   async sendMessage(@Body() body: SendTextDto, @Request() req) {
@@ -91,7 +89,6 @@ export class WhatsappController {
     );
   }
 
-  // 📷 آپلود مستقیم عکس
   @Post('upload-image')
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
@@ -123,7 +120,6 @@ export class WhatsappController {
     );
   }
 
-  // 📄 ارسال فایل (از طریق لینک)
   @Post('send-file')
   @ApiOperation({ summary: 'ارسال فایل با لینک' })
   async sendFile(@Body() body: SendFileDto, @Request() req) {
@@ -138,7 +134,6 @@ export class WhatsappController {
     );
   }
 
-  // 📢 ارسال انبوه
   @Post('send-bulk')
   @ApiOperation({ summary: 'ارسال پیام گروهی' })
   async sendBulk(@Body() body: SendBulkDto, @Request() req) {
@@ -158,7 +153,6 @@ export class WhatsappController {
     return { summary: 'ارسال انبوه تمام شد', results };
   }
 
-  // 🔗 تنظیم وب‌هوک
   @Post('webhook')
   @ApiOperation({ summary: 'تنظیم آدرس وب‌هوک برای دریافت پیام‌ها' })
   async setWebhook(@Body() body: SetWebhookDto, @Request() req) {
@@ -166,7 +160,6 @@ export class WhatsappController {
     return this.whatsappService.setWebhook(sessionId, body.url, req.user.userId);
   }
   
-  // 👥 لیست مخاطبین
   @Get('contacts')
   @ApiOperation({ summary: 'دریافت لیست کسانی که با آن‌ها چت کرده‌اید' })
   async getContacts(@Request() req) {
@@ -174,11 +167,42 @@ export class WhatsappController {
     return this.whatsappService.getContacts(sessionId);
   }
 
-  // 💬 تاریخچه چت
   @Get('history/:phone')
   @ApiOperation({ summary: 'دریافت تاریخچه پیام‌ها با یک شماره خاص' })
   async getChatHistory(@Param('phone') phone: string, @Request() req) {
     const sessionId = this.getSessionId(req);
     return this.whatsappService.getChatHistory(sessionId, phone);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('keywords')
+  async addKeyword(@Body() body: { trigger: string; response: string }, @Request() req) {
+    return this.prisma.keyword.create({
+      data: {
+        trigger: body.trigger.toLowerCase().trim(),
+        response: body.response,
+        userId: req.user.userId,
+      },
+    });
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('keywords')
+  async getKeywords(@Request() req) {
+    return this.prisma.keyword.findMany({
+      where: { userId: req.user.userId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('keywords/:id')
+  async deleteKeyword(@Param('id') id: string, @Request() req) {
+    return this.prisma.keyword.delete({
+      where: { 
+        id: Number(id),
+        userId: req.user.userId 
+      },
+    });
   }
 }

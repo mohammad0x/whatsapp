@@ -17,22 +17,20 @@ model User {
   
   // ارتباط: هر کاربر چندین نشست واتساپ دارد
   sessions  Session[]
+  keywords Keyword[]
 }
 
-// 📱 جدول نشست‌های واتساپ
 model Session {
-  id        String   @id // مثلا: session_123
-  phone     String?
-  status    String   @default("DISCONNECTED")
-  webhookUrl String?
-  
-  // ارتباط با کاربر (مالک این خط کیست؟)
-  userId    Int
-  user      User     @relation(fields: [userId], references: [id])
-  
-  messages  Message[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String    @id
+  status          String
+  phone           String?
+  webhookUrl      String?
+  // ✅ فیلد جدید برای پاسخ پیش‌فرض
+  defaultResponse String?   @default("متاسفانه متوجه نشدم. لطفا یکی از گزینه‌های منو را انتخاب کنید یا کلمه 'سلام' را بفرستید.")
+  userId          Int
+  user            User      @relation(fields: [userId], references: [id])
+  createdAt       DateTime  @default(now())
+  messages        Message[]
 }
 
 // 💬 جدول پیام‌ها
@@ -47,4 +45,15 @@ model Message {
 
   sessionId String
   session   Session @relation(fields: [sessionId], references: [id])
+}
+
+model Keyword {
+  id        Int      @id @default(autoincrement())
+  trigger   String   // اصلاح شد: String با S بزرگ
+  response  String   
+  userId    Int      
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([userId, trigger]) 
 }

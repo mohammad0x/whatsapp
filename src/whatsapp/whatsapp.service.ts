@@ -1,5 +1,5 @@
 import { Injectable, OnModuleInit, NotFoundException } from '@nestjs/common';
-import makeWASocket, { DisconnectReason, useMultiFileAuthState, jidDecode } from '@whiskeysockets/baileys';
+import makeWASocket, { DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys';
 import * as QRCode from 'qrcode'; 
 import * as qrcodeTerminal from 'qrcode-terminal';
 import pino from 'pino';
@@ -18,6 +18,7 @@ export class WhatsappService implements OnModuleInit {
     private chatbotService: ChatbotService
   ) {}
 
+  // 🔄 بازیابی خودکار تمام سشن‌های موجود در هنگام شروع سرور
   async onModuleInit() {
     const authDir = 'auth_info';
     if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
@@ -25,27 +26,46 @@ export class WhatsappService implements OnModuleInit {
     const folders = fs.readdirSync(authDir);
     for (const sessionId of folders) {
       if(fs.existsSync(`${authDir}/${sessionId}/creds.json`)) {
-           console.log(`🔄 Recovering Session: ${sessionId}`);
-           await this.createSession(sessionId, 0, false);
+           console.log(`🔄 در حال بازیابی نشست: ${sessionId}`);
+           
+           // تشخیص UserId از نام سشن (مثلا از session_2 عدد 2 را برمی‌دارد)
+           const parts = sessionId.split('_');
+           const userId = parts.length > 1 ? parseInt(parts[1]) : 0;
+           
+           // تلاش برای اتصال مجدد (isNew = false)
+           await this.createSession(sessionId, userId, false);
       }
     }
   }
 
+  // 📊 مشاهده وضعیت زنده ربات
   async getSessionStatus(sessionId: string, userId: number) {
     const sock = this.sessions.get(sessionId);
-    if(sock?.user) return { status: 'CONNECTED', qr: null, phone: sock.user.id.split(':')[0], sessionId };
     
+    // اگر وصل بود
+    if(sock?.user) {
+        return { 
+            status: 'CONNECTED', 
+            qr: null, 
+            phone: sock.user.id.split(':')[0], 
+            sessionId 
+        };
+    }
+    
+    // اگر در حال انتظار برای اسکن بود
     const qr = this.qrCodes.get(sessionId);
     if (qr) return { status: 'SCAN_QR', qr, sessionId };
 
+    // بررسی دیتابیس
     const sessionRecord = await this.prisma.session.findUnique({ where: { id: sessionId } });
-    if (!sessionRecord) return { status: 'NOT_CREATED', message: 'Please start session first', sessionId };
+    if (!sessionRecord) return { status: 'NOT_CREATED', message: 'ابتدا ربات را استارت بزنید', sessionId };
 
     return { status: 'DISCONNECTED', qr: null, sessionId };
   }
 
+  // 🔥 هسته اصلی ساخت اتصال واتساپ
   async createSession(sessionId: string, userId: number, isNew = true) {
-    if (this.sessions.has(sessionId)) return { message: 'Already active', sessionId };
+    if (this.sessions.has(sessionId)) return { message: 'ربات در حال حاضر فعال است', sessionId };
 
     const authFolder = `auth_info/${sessionId}`;
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
@@ -54,44 +74,50 @@ export class WhatsappService implements OnModuleInit {
       auth: state,
       logger: pino({ level: 'silent' }) as any, 
       connectTimeoutMs: 60000,
-      printQRInTerminal: false,
-      browser: ['Whatsapp 360 Clone', 'Chrome', '1.0.0'],
+      printQRInTerminal: false, // چاپ دستی برای زیبایی بیشتر
+      browser: ['WhatsApp 360 Clone', 'Chrome', '1.0.0'],
       retryRequestDelayMs: 5000,
     });
 
     this.sessions.set(sessionId, sock);
 
+    // مدیریت رویدادهای اتصال
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
+      // نمایش QR کد
       if (qr) {
-        console.log(`\n📷 Scan QR Code for ${sessionId}:`);
+        console.log(`\n📷 اسکن کنید (${sessionId}):`);
         qrcodeTerminal.generate(qr, { small: true });
         const qrImage = await QRCode.toDataURL(qr);
         this.qrCodes.set(sessionId, qrImage);
-        if (userId !== 0) await this.saveSessionToDb(sessionId, 'SCAN_QR', userId);
+        
+        // ذخیره وضعیت در دیتابیس (اطمینان از وجود رکورد)
+        await this.saveSessionToDb(sessionId, 'SCAN_QR', userId);
       }
 
+      // اتصال موفق
       if (connection === 'open') {
-        console.log(`✅ Session ${sessionId} CONNECTED!`);
+        console.log(`✅ ربات ${sessionId} با موفقیت متصل شد!`);
         this.qrCodes.delete(sessionId);
         const myPhone = sock.user?.id?.split(':')[0];
         
-        if (userId !== 0) await this.saveSessionToDb(sessionId, 'CONNECTED', userId, myPhone);
-        else await this.prisma.session.update({ where: { id: sessionId }, data: { status: 'CONNECTED', phone: myPhone } }).catch(() => {});
+        // آپدیت دیتابیس
+        await this.saveSessionToDb(sessionId, 'CONNECTED', userId, myPhone);
       }
       
+      // قطع اتصال
       if (connection === 'close') {
           const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
           const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
           this.qrCodes.delete(sessionId); 
 
           if (shouldReconnect) {
-              // console.log(`⚠️ Reconnecting ${sessionId}...`);
+              console.log(`⚠️ اتصال ${sessionId} قطع شد، در حال تلاش مجدد...`);
               this.sessions.delete(sessionId);
               setTimeout(() => this.createSession(sessionId, userId, false), 3000);
           } else {
-              console.log(`❌ Logged out ${sessionId}`);
+              console.log(`❌ سشن ${sessionId} لاگ‌اوت شد.`);
               this.sessions.delete(sessionId);
               try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch(e) {}
               await this.prisma.session.update({ where: { id: sessionId }, data: { status: 'DISCONNECTED' } }).catch(() => {});
@@ -101,44 +127,51 @@ export class WhatsappService implements OnModuleInit {
 
     sock.ev.on('creds.update', saveCreds);
 
-// 📩 دریافت پیام (نسخه بدون باگ TypeScript)
-    sock.ev.on('messages.upsert', async (m) => {
+    // 📩 مدیریت هوشمند پیام‌های دریافتی (ضد لوپ + کلمات کلیدی داینامیک)
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
       try {
-        const msg = m.messages[0];
+        // ۱. فقط پیام‌های جدید واقعی (Notify) را پردازش کن (جلوگیری از لوپ 'append')
+        if (type !== 'notify') return;
+
+        const msg = messages[0];
+        // ۲. اگر پیام از طرف خودِ ربات بود، نادیده بگیر
         if (!msg.message || msg.key.fromMe) return; 
 
-        let senderJid = msg.key.remoteJid;
+        const senderJid = msg.key.remoteJid;
         if (!senderJid || senderJid === 'status@broadcast') return;
 
-        // 🕵️ تشخیص نوع پیام
-        // از ?. استفاده می‌کنیم تا اگر خاصیتی نبود، ارور ندهد
+        const senderClean = senderJid.split('@')[0].split(':')[0];
+
+        // 🛡️ ۳. جلوگیری از لوپ بین دو رباتِ خودمان (Enterprise Protection)
+        // چک می‌کنیم آیا فرستنده خودش یکی از شماره‌های ثبت شده در کل سیستم ماست؟
+        const isInternalBot = await this.prisma.session.findFirst({
+            where: { phone: senderClean }
+        });
+        if (isInternalBot) return; 
+
+        // تشخیص محتوای پیام
         const messageType = Object.keys(msg.message)[0];
         let text = '';
-        let type = 'text';
+        let messageContentType = 'text';
 
         if (messageType === 'conversation') {
             text = msg.message.conversation || '';
         } else if (messageType === 'extendedTextMessage') {
             text = msg.message.extendedTextMessage?.text || '';
         } else if (messageType === 'imageMessage') {
-            type = 'image';
+            messageContentType = 'image';
             text = msg.message.imageMessage?.caption || '[Photo]';
         } else if (messageType === 'videoMessage') {
-            type = 'video';
+            messageContentType = 'video';
             text = msg.message.videoMessage?.caption || '[Video]';
         } else if (messageType === 'documentMessage') {
-            type = 'document';
+            messageContentType = 'document';
             text = msg.message.documentMessage?.caption || msg.message.documentMessage?.fileName || '[File]';
         } else {
-            // اگر نوع پیام چیز دیگری بود (مثلا استیکر)، فعلاً نادیده بگیر یا لاگ کن
-            // console.log('Unknown message type:', messageType);
             return; 
         }
 
-        // تمیز کردن شماره
-        const senderClean = senderJid.split('@')[0];
-
-        // Duplicate Check
+        // ۴. چک کردن تکراری نبودن (Double-Check)
         const recentDuplicate = await this.prisma.message.findFirst({
             where: {
                 sessionId,
@@ -147,45 +180,68 @@ export class WhatsappService implements OnModuleInit {
                 createdAt: { gte: new Date(Date.now() - 2000) } 
             }
         });
-
         if (recentDuplicate) return;
 
-        console.log(`📩 New ${type} from ${senderClean}: ${text}`);
+        console.log(`📩 پیام جدید از ${senderClean}: ${text}`);
 
-        // ذخیره در دیتابیس
+        // ۵. ذخیره پیام در دیتابیس
         const savedMsg = await this.prisma.message.create({
             data: {
                 text: text,
                 sender: senderClean,
                 receiver: 'ME',
                 isFromMe: false,
-                type: type,
+                type: messageContentType,
                 sessionId: sessionId
             }
         });
 
-        // ارسال وب‌هوک
+        // ۶. ارسال وب‌هوک به سرور مشتری
         await this.triggerWebhook(sessionId, {
             event: 'message.received',
             data: {
                 id: savedMsg.id,
                 wa_id: msg.key.id,
                 from: senderClean,
-                type: type,
+                type: messageContentType,
                 body: text,
                 timestamp: Math.floor(Date.now() / 1000),
                 pushName: msg.pushName || ''
             }
         });
 
+        // 🤖 ۷. چت‌بات با کلمات کلیدی داینامیک
+  // 🤖 چت‌بات هوشمند (کلمات کلیدی + پاسخ پیش‌فرض)
+        const currentSession = await this.prisma.session.findUnique({
+             where: { id: sessionId },
+             select: { userId: true, defaultResponse: true } // گرفتن پاسخ پیش‌فرض
+        });
+
+        if (currentSession?.userId && messageContentType === 'text') {
+             // ۱. اول بگرد دنبال کلمه کلیدی
+             let botResponse = await this.chatbotService.getResponse(currentSession.userId, text);
+             
+             // ۲. اگر کلمه کلیدی پیدا نشد، از پاسخ پیش‌فرض استفاده کن
+             if (!botResponse) {
+                 botResponse = currentSession.defaultResponse;
+             }
+             
+             // ۳. ارسال نهایی
+             if (botResponse) {
+                 console.log(`🤖 پاسخ ربات به ${senderClean}: ${botResponse}`);
+                 await new Promise(r => setTimeout(r, 1000));
+                 await this.sendTextMessage(sessionId, senderJid, botResponse, 0);
+             }
+        }
       } catch (error) {
-          console.error('Error handling message:', error.message);
+          console.error('❌ خطای پردازش پیام:', error.message);
       }
     });
 
-    return { message: 'Session started', sessionId };
+    return { message: 'ربات با موفقیت فعال شد', sessionId };
   }
 
+  // 🔗 ارسال داده‌ها به URL وب‌هوک
   private async triggerWebhook(sessionId: string, payload: any) {
       try {
           const session = await this.prisma.session.findUnique({ 
@@ -194,102 +250,122 @@ export class WhatsappService implements OnModuleInit {
           });
 
           if (session?.webhookUrl) {
-              // لاگ کوتاه و تمیز
-              console.log(`🚀 Webhook -> ${session.webhookUrl} [${payload.data.from}]`);
+              console.log(`🚀 ارسال وب‌هوک به: ${session.webhookUrl}`);
               await axios.post(session.webhookUrl, payload, { timeout: 5000 });
           }
       } catch (error) {
-          // فقط اگر خطا داد لاگ بگیر
-          console.error(`❌ Webhook Error: ${error.message}`);
+          console.error(`⚠️ وب‌هوک ناموفق: ${error.message}`);
       }
   }
 
-  // ... (سایر متدها: setWebhook, sendTextMessage, etc بدون تغییر)
+  // 🛠️ تنظیم آدرس وب‌هوک
   async setWebhook(sessionId: string, url: string, userId: number) {
-    const session = await this.prisma.session.findUnique({ where: { id: sessionId }});
-    if (!session) {
-         await this.prisma.session.create({ data: { id: sessionId, userId, status: 'DISCONNECTED', webhookUrl: url } });
-    } else {
-         await this.prisma.session.update({ where: { id: sessionId }, data: { webhookUrl: url } });
-    }
-    return { message: 'Webhook updated successfully', url };
+    // اطمینان از وجود سشن در دیتابیس قبل از آپدیت
+    await this.saveSessionToDb(sessionId, 'CONNECTED', userId);
+    return this.prisma.session.update({ where: { id: sessionId }, data: { webhookUrl: url } });
   }
 
-  async sendTextMessage(sessionId: string, phone: string, message: string, userId: number) {
+  // 🚀 ارسال پیام متنی (هوشمند برای LID و شماره)
+  async sendTextMessage(sessionId: string, phoneOrJid: string, message: string, userId: number) {
     let sock = this.sessions.get(sessionId);
-    const formattedPhone = phone.replace(/\D/g, '').replace(/^0/, '98');
-    const jid = `${formattedPhone}@s.whatsapp.net`;
+    
+    // تشخیص JID
+    let jid = phoneOrJid.includes('@') ? phoneOrJid : `${phoneOrJid.replace(/\D/g, '').replace(/^0/, '98')}@s.whatsapp.net`;
+    let receiverNum = jid.split('@')[0].split(':')[0];
 
     if (!sock) {
          const exists = await this.prisma.session.findUnique({ where: { id: sessionId }});
-         if(!exists) throw new NotFoundException('Session not found.');
+         if(!exists) throw new NotFoundException('نشست پیدا نشد. ابتدا ربات را روشن کنید.');
          await this.createSession(sessionId, userId, false);
          await new Promise(r => setTimeout(r, 3000));
          sock = this.sessions.get(sessionId);
     }
-    if (!sock) throw new Error('Could not connect.');
+    if (!sock) throw new Error('اتصال برقرار نشد.');
 
     await this.waitForConnection(sock);
     await sock.sendMessage(jid, { text: message });
 
+    // ذخیره پیام ارسالی ما در دیتابیس
     await this.prisma.message.create({
-        data: { text: message, sender: 'ME', receiver: formattedPhone, isFromMe: true, type: 'text', sessionId }
+        data: { text: message, sender: 'ME', receiver: receiverNum, isFromMe: true, type: 'text', sessionId }
     });
-    return { status: 'sent', phone: formattedPhone };
+    return { status: 'sent', phone: receiverNum };
   }
   
+  // 📷 ارسال عکس
   async sendImageBuffer(sessionId: string, phone: string, fileBuffer: Buffer, caption: string, userId: number) {
       let sock = this.sessions.get(sessionId);
       const formattedPhone = phone.replace(/\D/g, '').replace(/^0/, '98');
       const jid = `${formattedPhone}@s.whatsapp.net`;
+
       if (!sock) { await this.createSession(sessionId, userId, false); await new Promise(r => setTimeout(r, 3000)); sock = this.sessions.get(sessionId); }
       await this.waitForConnection(sock);
+      
       await sock.sendMessage(jid, { image: fileBuffer, caption, mimetype: 'image/jpeg' });
       await this.prisma.message.create({ data: { text: caption || '[IMAGE]', sender: 'ME', receiver: formattedPhone, isFromMe: true, type: 'image', sessionId } });
       return { status: 'sent', type: 'image' };
   }
 
+  // 📂 ارسال فایل (لینک یا آدرس محلی)
   async sendDocumentMessage(sessionId: string, phone: string, fileUrl: string, fileName: string, caption: string, userId: number) {
       let sock = this.sessions.get(sessionId);
       const formattedPhone = phone.replace(/\D/g, '').replace(/^0/, '98');
       const jid = `${formattedPhone}@s.whatsapp.net`;
-      let buffer: Buffer; let mimetype: string = 'application/octet-stream';
+
+      let buffer: Buffer;
+      let mimetype: string = 'application/octet-stream';
+
       try {
           if (fileUrl.startsWith('http')) {
               const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
               buffer = Buffer.from(response.data, 'binary');
               mimetype = response.headers['content-type'] || mimetype;
           } else {
-              if (!fs.existsSync(fileUrl)) throw new Error(`File not found: ${fileUrl}`);
               buffer = fs.readFileSync(fileUrl);
           }
-      } catch (e) { throw new Error(e.message); }
+      } catch (e) { throw new Error('خطا در دریافت فایل'); }
+
       if (!sock) { await this.createSession(sessionId, userId, false); await new Promise(r => setTimeout(r, 3000)); sock = this.sessions.get(sessionId); }
       await this.waitForConnection(sock);
+
       await sock.sendMessage(jid, { document: buffer, mimetype, fileName, caption });
       await this.prisma.message.create({ data: { text: caption || `[FILE: ${fileName}]`, sender: 'ME', receiver: formattedPhone, isFromMe: true, type: 'document', sessionId } });
       return { status: 'success' };
   }
 
+  // 👥 دریافت لیست مخاطبین (بر اساس پیام‌های قبلی)
   async getContacts(sessionId: string) {
-      const messages = await this.prisma.message.findMany({ where: { sessionId }, orderBy: { createdAt: 'desc' }, distinct: ['sender', 'receiver'] });
-      const contacts = new Map();
-      messages.forEach(msg => { const p = msg.isFromMe ? msg.receiver : msg.sender; if (p !== 'ME' && !contacts.has(p)) contacts.set(p, { phone: p, lastMessage: msg.text }); });
-      return Array.from(contacts.values());
+      return this.prisma.message.findMany({ 
+          where: { sessionId }, 
+          orderBy: { createdAt: 'desc' }, 
+          distinct: ['sender', 'receiver'] 
+      });
   }
 
+  // 💬 دریافت تاریخچه چت
   async getChatHistory(sessionId: string, phone: string) {
       const clean = phone.replace(/\D/g, ''); 
-      return this.prisma.message.findMany({ where: { sessionId, OR: [{ sender: clean }, { receiver: clean }] }, orderBy: { createdAt: 'asc' } });
+      return this.prisma.message.findMany({ 
+          where: { sessionId, OR: [{ sender: clean }, { receiver: clean }] }, 
+          orderBy: { createdAt: 'asc' } 
+      });
   }
 
+  // 💾 متد کمکی برای ذخیره امن سشن در دیتابیس (جلوگیری از خطای Foreign Key)
   private async saveSessionToDb(id: string, status: string, userId: number, phone?: string) {
-    if(userId === 0) return;
+    if(!userId || userId === 0) return;
     try { 
-        await this.prisma.session.upsert({ where: { id }, update: { status, phone }, create: { id, status, phone, userId } }); 
-    } catch(e) {}
+        await this.prisma.session.upsert({ 
+            where: { id }, 
+            update: { status, phone }, 
+            create: { id, status, phone, userId } 
+        }); 
+    } catch(e) {
+        console.error('❌ خطای دیتابیس (Upsert):', e.message);
+    }
   }
 
+  // ⏳ انتظار برای آماده شدن سوکت
   private async waitForConnection(sock: any): Promise<void> {
     if (sock?.user && sock?.ws?.isOpen) return;
     let attempts = 0;
@@ -298,6 +374,6 @@ export class WhatsappService implements OnModuleInit {
         await new Promise(r => setTimeout(r, 500));
         attempts++;
     }
-    throw new Error('Connection timed out');
+    throw new Error('اتصال برقرار نشد، لطفا مجدد تلاش کنید.');
   }
 }
