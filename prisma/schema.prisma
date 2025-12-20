@@ -3,57 +3,158 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql" // تغییر از sqlite به postgresql
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-// 👤 جدول کاربران (برای ثبت نام)
 model User {
-  id        Int       @id @default(autoincrement())
-  email     String    @unique
-  password  String    // رمز عبور هش شده
-  name      String?
-  createdAt DateTime  @default(now())
+  id              Int       @id @default(autoincrement())
+  email           String    @unique
+  password        String    
+  name            String?
   
-  // ارتباط: هر کاربر چندین نشست واتساپ دارد
-  sessions  Session[]
-  keywords Keyword[]
+  // ✅ فیلدهای آینده‌نگرانه (SaaS Fields)
+  plan            String    @default("FREE") // FREE, PRO, BUSINESS
+  subscriptionEnd DateTime? // تاریخ انقضای اشتراک
+  isActive        Boolean   @default(true)
+  
+  createdAt       DateTime  @default(now())
+
+  sessions        Session[] 
+  keywords        Keyword[] 
+  agents          Agent[]   
+  cannedResponses CannedResponse[] 
 }
 
+// 🤖 ربات واتساپ
 model Session {
   id              String    @id
-  status          String
+  status          String    
   phone           String?
   webhookUrl      String?
-  // ✅ فیلد جدید برای پاسخ پیش‌فرض
-  defaultResponse String?   @default("متاسفانه متوجه نشدم. لطفا یکی از گزینه‌های منو را انتخاب کنید یا کلمه 'سلام' را بفرستید.")
+  defaultResponse String?   @default("متاسفانه متوجه نشدم. لطفا 'سلام' را بفرستید.")
+  
   userId          Int
   user            User      @relation(fields: [userId], references: [id])
+  
+  conversations   Conversation[] 
   createdAt       DateTime  @default(now())
-  messages        Message[]
 }
 
-// 💬 جدول پیام‌ها
-model Message {
+// 🕵️ اپراتور پشتیبانی (Agent)
+model Agent {
   id        Int      @id @default(autoincrement())
-  text      String
-  sender    String
-  receiver  String
-  isFromMe  Boolean
-  type      String
-  createdAt DateTime @default(now())
-
-  sessionId String
-  session   Session @relation(fields: [sessionId], references: [id])
-}
-
-model Keyword {
-  id        Int      @id @default(autoincrement())
-  trigger   String   // اصلاح شد: String با S بزرگ
-  response  String   
+  name      String
+  email     String   @unique
+  password  String   
+  role      String   @default("AGENT") 
+  isOnline  Boolean  @default(false)
+  avatar    String?  
+  signature String?  // ✅ جدید: امضای اختصاصی (مثلا: "ارادتمند، علی")
+  
   userId    Int      
   user      User     @relation(fields: [userId], references: [id])
-  createdAt DateTime @default(now())
 
-  @@unique([userId, trigger]) 
+  assignedConversations Conversation[] 
+  createdAt DateTime @default(now())
+}
+
+// ✅ جدید: پاسخ‌های آماده (Quick Reply)
+model CannedResponse {
+  id        Int      @id @default(autoincrement())
+  shortcut  String   // مثلا: "card"
+  content   String   // متن طولانی پاسخ
+  
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+// 📞 پروفایل مخاطب/مشتری
+model Contact {
+  id          Int      @id @default(autoincrement())
+  phone       String   @unique 
+  pushName    String?  
+  name        String?  
+  avatarUrl   String?
+  email       String?
+  
+  tags        Tag[]    
+  notes       Note[]   
+  
+  conversations Conversation[]
+  createdAt   DateTime @default(now())
+}
+
+// 📂 پرونده مکالمه
+model Conversation {
+  id          Int       @id @default(autoincrement())
+  status      String    @default("OPEN") // OPEN, CLOSED, PENDING
+  priority    String    @default("MEDIUM") 
+  unreadCount Int       @default(0)
+  
+  contactId   Int
+  contact     Contact   @relation(fields: [contactId], references: [id])
+  
+  sessionId   String
+  session     Session   @relation(fields: [sessionId], references: [id])
+  
+  assignedTo  Int?      
+  agent       Agent?    @relation(fields: [assignedTo], references: [id])
+  
+  messages    Message[] 
+  
+  lastMessageAt DateTime @default(now()) 
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// 📨 پیام
+model Message {
+  id        Int      @id @default(autoincrement())
+  text      String?  
+  type      String   
+  
+  sender    String   
+  receiver  String   
+  isFromMe  Boolean
+  
+  mediaUrl  String?
+  caption   String?
+  
+  conversationId Int
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+
+  createdAt DateTime @default(now())
+}
+
+// 🏷️ برچسب‌ها
+model Tag {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  color     String    @default("#000000")
+  contacts  Contact[]
+}
+
+// 📝 یادداشت‌های داخلی
+model Note {
+  id        Int      @id @default(autoincrement())
+  text      String
+  author    String?  
+  
+  contactId Int
+  contact   Contact  @relation(fields: [contactId], references: [id])
+  
+  createdAt DateTime @default(now())
+}
+
+// 🔑 کلمات کلیدی (قدیمی)
+model Keyword {
+  id        Int      @id @default(autoincrement())
+  trigger   String
+  response  String
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  
+  createdAt DateTime @default(now())
+  @@unique([userId, trigger])
 }

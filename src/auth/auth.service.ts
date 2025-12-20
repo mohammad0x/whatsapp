@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -10,12 +10,17 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
-  async signup(email: string, password: string) {
+  async signup(email: string, password: string, name?: string) {
+    // جلوگیری از ثبت ایمیل تکراری
+    const existingUser = await this.prisma.user.findUnique({ where: { email } });
+    if (existingUser) throw new ConflictException('Email already exists');
+
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await this.prisma.user.create({
       data: {
         email,
         password: hashedPassword,
+        name: name || 'Admin', // ✅ ذخیره نام
       },
     });
     return { message: 'User created successfully', userId: user.id };
@@ -31,6 +36,7 @@ export class AuthService {
     const payload = { sub: user.id, email: user.email };
     return {
       access_token: this.jwtService.sign(payload),
+      user: { id: user.id, email: user.email, name: user.name } // بازگرداندن اطلاعات کاربر
     };
   }
 }

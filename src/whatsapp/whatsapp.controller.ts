@@ -1,9 +1,24 @@
-import { Body, Controller, UseInterceptors, UploadedFile, Get, Param, Post, UseGuards, Request, BadRequestException, Delete } from '@nestjs/common';
+import { 
+  Body, 
+  Controller, 
+  UseInterceptors, 
+  UploadedFile, 
+  Get, 
+  Param, 
+  Post, 
+  UseGuards, 
+  Request, 
+  BadRequestException, 
+  Delete 
+} from '@nestjs/common';
 import { WhatsappService } from './whatsapp.service';
+import { QueueService } from '../queue/queue.service'; 
 import { ApiBearerAuth, ApiConsumes, ApiBody, ApiOperation, ApiTags, ApiProperty } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FileInterceptor } from '@nestjs/platform-express'; 
-import { PrismaService } from '../prisma/prisma.service'; // ✅ ایمپورت شده
+import { PrismaService } from '../prisma/prisma.service';
+
+// --- DTOs ---
 
 class StartSessionDto {}
 
@@ -26,43 +41,56 @@ class SendFileDto {
   phone: string;
   @ApiProperty({ description: 'لینک دانلود فایل' })
   fileUrl: string;
-  @ApiProperty({ description: 'نام فایل (مثال: invoice.pdf)' })
+  @ApiProperty({ description: 'نام فایل' })
   fileName: string;
-  @ApiProperty({ description: 'توضیحات (اختیاری)', required: false })
+  @ApiProperty({ description: 'توضیحات', required: false })
   caption: string;
 }
 
 class SendBulkDto {
-  @ApiProperty({ description: 'لیست شماره‌ها', type: [String] })
+  @ApiProperty({ description: 'لیست شماره‌ها', type: [String], example: ['989120000000', '989350000000'] })
   phones: string[];
-  @ApiProperty({ description: 'پیام همگانی' })
+  @ApiProperty({ description: 'متن پیام همگانی' })
   message: string;
-  @ApiProperty({ description: 'تاخیر بین پیام‌ها (ثانیه)', default: 5 })
-  delay: number;
+  @ApiProperty({ description: 'لینک تصویر (اختیاری)', required: false })
+  mediaUrl?: string;
 }
 
 class SetWebhookDto {
-  @ApiProperty({ description: 'آدرس سرور شما برای دریافت پیام‌ها' })
+  @ApiProperty({ description: 'آدرس وب‌هوک' })
   url: string;
 }
+
+class AddKeywordDto {
+  @ApiProperty({ description: 'کلمه کلیدی' })
+  trigger: string;
+  @ApiProperty({ description: 'پاسخ ربات' })
+  response: string;
+}
+
+// --- Controller Logic ---
 
 @ApiTags('WhatsApp')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('whatsapp')
 export class WhatsappController {
-  // ✅ فیکس: اضافه کردن private readonly prisma: PrismaService
   constructor(
     private readonly whatsappService: WhatsappService,
-    private readonly prisma: PrismaService 
+    private readonly prisma: PrismaService,
+    private readonly queueService: QueueService
   ) {}
 
   private getSessionId(req: any): string {
     return `session_${req.user.userId}`;
   }
 
+  // ==========================================
+  // 1️⃣ مدیریت اتصال
+  // ==========================================
+
   @Post('start')
-  @ApiOperation({ summary: 'ساخت و روشن کردن ربات برای کاربر جاری' })
+  @ApiOperation({ summary: 'روشن کردن ربات' })
   async startSession(@Body() body: StartSessionDto, @Request() req) {
     const userId = req.user.userId;
     const sessionId = this.getSessionId(req);
@@ -70,15 +98,26 @@ export class WhatsappController {
   }
 
   @Get('status')
-  @ApiOperation({ summary: 'بررسی وضعیت اتصال من و دریافت QR کد' })
+  @ApiOperation({ summary: 'وضعیت اتصال و QR کد' })
   async getStatus(@Request() req) {
     const userId = req.user.userId;
     const sessionId = this.getSessionId(req);
     return this.whatsappService.getSessionStatus(sessionId, userId);
   }
 
-  @Post('send-text')
-  @ApiOperation({ summary: 'ارسال پیام متنی' })
+  @Delete('session')
+  @ApiOperation({ summary: 'قطع اتصال و تغییر شماره' })
+  async disconnect() {
+    await this.whatsappService.disconnect();
+    return { status: 'DISCONNECTED', message: 'Session removed' };
+  }
+
+  // ==========================================
+  // 2️⃣ ارسال پیام
+  // ==========================================
+
+  @Post('send/text') 
+  @ApiOperation({ summary: 'ارسال پیام متنی فوری' })
   async sendMessage(@Body() body: SendTextDto, @Request() req) {
     const sessionId = this.getSessionId(req);
     return this.whatsappService.sendTextMessage(
@@ -92,7 +131,7 @@ export class WhatsappController {
   @Post('upload-image')
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'آپلود عکس از سیستم' })
+  @ApiOperation({ summary: 'ارسال عکس' })
   @ApiBody({
     schema: {
       type: 'object',
@@ -108,9 +147,9 @@ export class WhatsappController {
     @UploadedFile() file: Express.Multer.File,
     @Request() req
   ) {
-    if (!file) throw new BadRequestException('❌ لطفا یک فایل انتخاب کنید!');
-
+    if (!file) throw new BadRequestException('❌ لطفا فایل انتخاب کنید');
     const sessionId = this.getSessionId(req);
+    
     return this.whatsappService.sendImageBuffer(
         sessionId,
         body.phone,
@@ -134,49 +173,60 @@ export class WhatsappController {
     );
   }
 
+  // ==========================================
+  // 3️⃣ ارسال انبوه
+  // ==========================================
+
   @Post('send-bulk')
-  @ApiOperation({ summary: 'ارسال پیام گروهی' })
+  @ApiOperation({ summary: 'ارسال انبوه هوشمند' })
   async sendBulk(@Body() body: SendBulkDto, @Request() req) {
     const sessionId = this.getSessionId(req);
-    const delayTime = (body.delay || 5) * 1000;
-    const results: any[] = [];
+    
+    const result = await this.queueService.addBulkCampaign(
+        req.user.userId,
+        sessionId,
+        body.phones,
+        body.message,
+        body.mediaUrl
+    );
 
-    for (const phone of body.phones) {
-        try {
-            await this.whatsappService.sendTextMessage(sessionId, phone, body.message, req.user.userId);
-            results.push({ phone, status: 'sent' });
-            if (body.phones.length > 1) await new Promise(r => setTimeout(r, delayTime));
-        } catch (error) {
-            results.push({ phone, status: 'failed', error: error.message });
-        }
-    }
-    return { summary: 'ارسال انبوه تمام شد', results };
+    return { 
+        success: true,
+        message: 'کمپین ارسال انبوه در صف قرار گرفت.',
+        queueDetails: result 
+    };
   }
 
+  // ==========================================
+  // 4️⃣ اینباکس
+  // ==========================================
+
+  @Get('conversations')
+  @ApiOperation({ summary: 'دریافت لیست چت‌ها' })
+  async getConversations(@Request() req) {
+    const sessionId = this.getSessionId(req);
+    return this.whatsappService.getConversations(sessionId);
+  }
+
+  @Get('messages/:id') 
+  @ApiOperation({ summary: 'دریافت پیام‌های چت' })
+  async getConversationMessages(@Param('id') id: string, @Request() req) {
+    return this.whatsappService.getConversationMessages(Number(id));
+  }
+
+  // ==========================================
+  // 5️⃣ تنظیمات
+  // ==========================================
+
   @Post('webhook')
-  @ApiOperation({ summary: 'تنظیم آدرس وب‌هوک برای دریافت پیام‌ها' })
   async setWebhook(@Body() body: SetWebhookDto, @Request() req) {
     const sessionId = this.getSessionId(req);
     return this.whatsappService.setWebhook(sessionId, body.url, req.user.userId);
   }
-  
-  @Get('contacts')
-  @ApiOperation({ summary: 'دریافت لیست کسانی که با آن‌ها چت کرده‌اید' })
-  async getContacts(@Request() req) {
-    const sessionId = this.getSessionId(req);
-    return this.whatsappService.getContacts(sessionId);
-  }
 
-  @Get('history/:phone')
-  @ApiOperation({ summary: 'دریافت تاریخچه پیام‌ها با یک شماره خاص' })
-  async getChatHistory(@Param('phone') phone: string, @Request() req) {
-    const sessionId = this.getSessionId(req);
-    return this.whatsappService.getChatHistory(sessionId, phone);
-  }
-
-  @UseGuards(JwtAuthGuard)
   @Post('keywords')
-  async addKeyword(@Body() body: { trigger: string; response: string }, @Request() req) {
+  @ApiOperation({ summary: 'افزودن کلمه کلیدی' })
+  async addKeyword(@Body() body: AddKeywordDto, @Request() req) {
     return this.prisma.keyword.create({
       data: {
         trigger: body.trigger.toLowerCase().trim(),
@@ -186,7 +236,6 @@ export class WhatsappController {
     });
   }
 
-  @UseGuards(JwtAuthGuard)
   @Get('keywords')
   async getKeywords(@Request() req) {
     return this.prisma.keyword.findMany({
@@ -195,7 +244,6 @@ export class WhatsappController {
     });
   }
 
-  @UseGuards(JwtAuthGuard)
   @Delete('keywords/:id')
   async deleteKeyword(@Param('id') id: string, @Request() req) {
     return this.prisma.keyword.delete({

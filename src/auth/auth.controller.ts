@@ -8,6 +8,9 @@ class AuthDto {
 
   @ApiProperty({ example: '123456' })
   password: string;
+
+  @ApiProperty({ example: 'Admin User', required: false })
+  name?: string; // ✅ اضافه شد
 }
 
 @ApiTags('Auth')
@@ -15,10 +18,11 @@ class AuthDto {
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Post('signup')
+  // ✅ تغییر نام مسیر از signup به register (برای هماهنگی با تست و استاندارد)
+  @Post('register')
   @ApiOperation({ summary: 'Create new user' })
   async signup(@Body() body: AuthDto) {
-    return this.authService.signup(body.email, body.password);
+    return this.authService.signup(body.email, body.password, body.name);
   }
 
   @Post('login')
