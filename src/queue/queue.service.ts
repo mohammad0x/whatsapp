@@ -28,4 +28,14 @@ export class QueueService {
     await this.messageQueue.addBulk(jobs);
     return { status: 'queued', count: jobs.length };
   }
+  // در کلاس QueueService اضافه کنید:
+
+  async getQueueStatus() {
+    const counts = await this.messageQueue.getJobCounts();
+    return {
+      waiting: counts.waiting + counts.active, // پیام‌های در حال ارسال یا منتظر
+      completed: counts.completed,
+      failed: counts.failed
+    };
+  }
 }

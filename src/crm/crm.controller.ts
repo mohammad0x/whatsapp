@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards, Request } from '@nestjs/common';
+import { Body, Controller,Query, Get, Param, Patch, Post, UseGuards, Request } from '@nestjs/common';
 import { CrmService } from './crm.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
@@ -76,5 +76,12 @@ async addNote(@Param('id') id: string, @Body() body: { text: string }, @Request(
   @Post('agents')
   async createAgent(@Body() body: any, @Request() req) {
     return this.crmService.createAgent(req.user.userId, body);
+  }
+    // در داخل کلاس CrmController اضافه کنید:
+
+  @Get('contacts')
+  @ApiOperation({ summary: 'دریافت لیست مخاطبین' })
+  async getAllContacts(@Query('search') search?: string) {
+    return this.crmService.getContacts(search);
   }
 }

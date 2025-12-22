@@ -96,6 +96,23 @@ export class CrmService {
       }
     });
   }
+   // در داخل کلاس CrmService اضافه کنید:
+
+async getContacts(search?: string) {
+  return this.prisma.contact.findMany({
+    where: search ? {
+      OR: [
+        { phone: { contains: search } },
+        { pushName: { contains: search } }
+      ]
+    } : undefined,
+    include: {
+      tags: true,
+      _count: { select: { conversations: true } } // تعداد مکالمات
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+}
 
   async getAgents(userId: number) {
     return this.prisma.agent.findMany({
