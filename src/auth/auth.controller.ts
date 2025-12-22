@@ -1,16 +1,22 @@
 import { Body, Controller, Post } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { ApiTags, ApiOperation, ApiProperty } from '@nestjs/swagger';
+import { IsEmail, IsString, MinLength, IsOptional } from 'class-validator';
 
 class AuthDto {
   @ApiProperty({ example: 'admin@test.com' })
+  @IsEmail({}, { message: 'فرمت ایمیل صحیح نیست' }) // ✅ اضافه شد
   email: string;
 
   @ApiProperty({ example: '123456' })
+  @IsString()
+  @MinLength(6, { message: 'رمز عبور باید حداقل ۶ کاراکتر باشد' }) // ✅ اضافه شد
   password: string;
 
   @ApiProperty({ example: 'Admin User', required: false })
-  name?: string; // ✅ اضافه شد
+  @IsOptional()
+  @IsString()
+  name?: string;
 }
 
 @ApiTags('Auth')

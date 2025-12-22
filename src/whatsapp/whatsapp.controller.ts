@@ -106,11 +106,11 @@ export class WhatsappController {
   }
 
   @Delete('session')
-  @ApiOperation({ summary: 'قطع اتصال و تغییر شماره' })
-  async disconnect() {
-    await this.whatsappService.disconnect();
+  async disconnect(@Request() req) {
+    const sessionId = this.getSessionId(req);
+    await this.whatsappService.disconnect(sessionId); // 👈 آیدی پاس داده شد
     return { status: 'DISCONNECTED', message: 'Session removed' };
-  }
+}
 
   // ==========================================
   // 2️⃣ ارسال پیام

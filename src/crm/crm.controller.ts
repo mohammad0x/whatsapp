@@ -31,12 +31,14 @@ export class CrmController {
     return this.crmService.getContactDetails(phone);
   }
 
-  // 4️⃣ افزودن یادداشت برای مشتری
-  @Post('contacts/:id/notes')
-  @ApiOperation({ summary: 'افزودن یادداشت محرمانه' })
-  async addNote(@Param('id') id: string, @Body() body: { text: string }, @Request() req) {
-    return this.crmService.addNote(Number(id), body.text, "Admin"); 
-  }
+// 4️⃣ افزودن یادداشت برای مشتری
+@Post('contacts/:id/notes')
+@ApiOperation({ summary: 'افزودن یادداشت محرمانه' })
+async addNote(@Param('id') id: string, @Body() body: { text: string }, @Request() req) {
+  // گرفتن نام یا ایمیل کاربر از توکن JWT
+  const authorName = req.user.name || req.user.email || 'Unknown Agent';
+  return this.crmService.addNote(Number(id), body.text, authorName); 
+}
 
   // 5️⃣ مدیریت تگ‌ها
   @Get('tags')

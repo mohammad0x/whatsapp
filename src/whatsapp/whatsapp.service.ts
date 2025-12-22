@@ -20,16 +20,21 @@ export class WhatsappService implements OnModuleInit {
     private eventsGateway: EventsGateway
   ) {}
 
-  async onModuleInit() {
+ 
+ async onModuleInit() {
     const authDir = 'auth_info';
     if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
-    if (fs.existsSync(`${authDir}/${this.DEFAULT_SESSION_ID}`)) {
-        console.log(`🔄 Recovering Session: ${this.DEFAULT_SESSION_ID}`);
-        // در ریکاوری، سینک را خاموش می‌کنیم تا استارت سریع باشد
-        await this.createSession(this.DEFAULT_SESSION_ID, 1, false);
+    // خواندن تمام پوشه‌های سشن
+    const sessions = fs.readdirSync(authDir);
+    for (const sessionName of sessions) {
+        if (sessionName.startsWith('session_')) {
+            const userId = parseInt(sessionName.split('_')[1]);
+            console.log(`🔄 Recovering ${sessionName}...`);
+            await this.createSession(sessionName, userId, false);
+        }
     }
-  }
+}
 
   async start() {
     return this.createSession(this.DEFAULT_SESSION_ID, 1);
@@ -91,7 +96,7 @@ export class WhatsappService implements OnModuleInit {
           } else {
               console.log(`❌ Logged out`);
               if (statusCode === DisconnectReason.loggedOut) {
-                  await this.disconnect();
+                  await this.disconnect(sid);
               } else {
                   await this.saveSessionToDb(sid, 'DISCONNECTED', userId);
               }
@@ -204,8 +209,8 @@ export class WhatsappService implements OnModuleInit {
     return { status: 'DISCONNECTED', sessionId: sid };
   }
 
-  async disconnect() {
-    const sid = this.DEFAULT_SESSION_ID;
+  async disconnect(sessionId: string) {
+    const sid = sessionId || this.DEFAULT_SESSION_ID;
     const sock = this.sessions.get(sid);
     try {
         console.log(`⚠️ Disconnecting session: ${sid}`);
