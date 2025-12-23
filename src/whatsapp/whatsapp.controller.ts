@@ -56,8 +56,30 @@ class SendBulkDto {
   mediaUrl?: string;
 }
 
-class SetWebhookDto {
-  @ApiProperty({ description: 'آدرس وب‌هوک' })
+
+
+// کلاسی برای تعریف ورودی‌های تست وب‌هوک
+ export class TestWebhookDto {
+  @ApiProperty({ required: false })
+  url?: string;
+
+  // 👇 اضافه کردن نوع تست
+  @ApiProperty({ 
+    required: false, 
+    enum: ['text', 'image', 'status'],
+    description: 'نوع سناریوی تست',
+    example: 'text'
+  })
+  type?: 'text' | 'image' | 'status';
+}
+
+// کلاسی برای تنظیم وب‌هوک (برای متد setWebhook هم بهتر است این کار را بکنید)
+export class SetWebhookDto {
+  @ApiProperty({ 
+    required: true, 
+    description: 'آدرس کامل وب‌هوک',
+    example: 'https://example.com/api/webhook' 
+  })
   url: string;
 }
 
@@ -218,10 +240,44 @@ export class WhatsappController {
   // 5️⃣ تنظیمات
   // ==========================================
 
+// ... داخل کلاس WhatsappController ...
+
+  // ۱. تنظیم وب‌هوک
   @Post('webhook')
-  async setWebhook(@Body() body: SetWebhookDto, @Request() req) {
-    const sessionId = this.getSessionId(req);
-    return this.whatsappService.setWebhook(sessionId, body.url, req.user.userId);
+  @ApiOperation({ summary: 'تنظیم آدرس وب‌هوک' })
+  // 👇 استفاده از DTO
+  async setWebhook(@Request() req, @Body() body: SetWebhookDto) {
+    const userId = req.user.userId;
+    const sessionId = `session_${userId}`;
+    return this.whatsappService.setWebhook(sessionId, body.url, userId);
+  }
+
+  // ... متدهای GET و DELETE ...
+
+  // ۳. تست وب‌هوک
+  @Post('webhook/test')
+  async testWebhook(@Request() req, @Body() body: TestWebhookDto) {
+    const userId = req.user.userId;
+    const sessionId = `session_${userId}`;
+    // ارسال نوع تست به سرویس
+    return this.whatsappService.testWebhook(sessionId, body.url, body.type);
+  }
+
+  // ۲. دریافت آدرس فعلی (برای نمایش در فرانت)
+  @Get('webhook')
+  async getWebhook(@Request() req) {
+    const userId = req.user.userId;
+    const sessionId = `session_${userId}`;
+    return this.whatsappService.getWebhook(sessionId);
+  }
+
+
+  // ۴. حذف وب‌هوک
+  @Delete('webhook')
+  async deleteWebhook(@Request() req) {
+    const userId = req.user.userId;
+    const sessionId = `session_${userId}`;
+    return this.whatsappService.deleteWebhook(sessionId);
   }
 
   @Post('keywords')

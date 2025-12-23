@@ -1,10 +1,11 @@
-import { Module, forwardRef } from '@nestjs/common'; // 👈 forwardRef اضافه شد
+import { Module, forwardRef } from '@nestjs/common'; 
 import { WhatsappService } from './whatsapp.service';
 import { WhatsappController } from './whatsapp.controller';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChatbotService } from './chatbot.service';
 import { EventsGateway } from '../events.gateway';
 import { QueueModule } from '../queue/queue.module'; 
+import { WebhookService } from './webhook.service'; 
 
 @Module({
   imports: [
@@ -15,7 +16,8 @@ import { QueueModule } from '../queue/queue.module';
     WhatsappService, 
     PrismaService, 
     ChatbotService, 
-    EventsGateway
+    EventsGateway,
+    WebhookService,
   ],
   exports: [WhatsappService] // 👈 حیاتی: این خط باعث می‌شود بقیه ماژول‌ها بتوانند از این سرویس استفاده کنند
 })

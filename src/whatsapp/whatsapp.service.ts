@@ -7,6 +7,7 @@ import pino from 'pino';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChatbotService } from './chatbot.service';
 import { EventsGateway } from '../events.gateway';
+import { WebhookService } from './webhook.service'; 
 
 @Injectable()
 export class WhatsappService implements OnModuleInit {
@@ -17,7 +18,8 @@ export class WhatsappService implements OnModuleInit {
   constructor(
     private prisma: PrismaService,
     private chatbotService: ChatbotService,
-    private eventsGateway: EventsGateway
+    private eventsGateway: EventsGateway,
+    private webhookService: WebhookService
   ) {}
 
  
@@ -119,12 +121,50 @@ export class WhatsappService implements OnModuleInit {
         console.log(`✅ History Sync Complete: ${count} messages processed.`);
     });
 
-    // ۳. دریافت پیام‌های جدید
+ // ۳. دریافت پیام‌های جدید
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
        for (const msg of messages) {
            if (!msg.message) continue;
+           
+           // جلوگیری از پردازش پیام‌های قدیمی (History) در وب‌هوک
            const isHistory = type === 'append'; 
+           
+           // 1. اجرای منطق قبلی خودتان (ذخیره در دیتابیس و ...)
            await this.handleIncomingMessage(sid, msg, sock, userId, isHistory);
+
+           // 2. 🚀 ارسال به وب‌هوک (فقط پیام‌های جدید و واقعی)
+           // شرط !msg.key.fromMe یعنی پیام‌های خود ربات را به وب‌هوک نفرست (اختیاری)
+           if (!isHistory && type === 'notify' && !msg.key.fromMe) {
+               
+               // استخراج نوع پیام (text, image, document...)
+               const msgType = Object.keys(msg.message)[0];
+               
+               // استخراج متن پیام (از هر نوعی که باشد)
+               const body = msg.message.conversation || 
+                            msg.message.extendedTextMessage?.text || 
+                            msg.message.imageMessage?.caption || 
+                            '';
+
+               // آماده‌سازی دیتا برای سرویس وب‌هوک
+               const webhookData = {
+                   id: msg.key.id,
+                   from: msg.key.remoteJid?.split('@')[0], // شماره فرستنده بدون @s.whatsapp.net
+                   timestamp: msg.messageTimestamp,
+                   type: msgType.replace('Message', ''), // تبدیل imageMessage به image
+                   text: { body: body },
+                   // اگر عکس بود، اطلاعات اضافه بفرست
+                   ...(msgType === 'imageMessage' && {
+                       image: { 
+                           mime_type: msg.message.imageMessage?.mimetype,
+                           caption: msg.message.imageMessage?.caption
+                       }
+                   })
+               };
+
+               // صدا زدن سرویس وب‌هوک (که در مرحله قبل ساختیم)
+               // این خط ارور نمیده چون try-catch داخلی دارد
+               this.webhookService.dispatch(sid, webhookData, 'message');
+           }
        }
     });
 
@@ -229,10 +269,14 @@ export class WhatsappService implements OnModuleInit {
     } catch (error) { throw new BadRequestException('Failed to disconnect'); }
   }
 
-  async sendTextMessage(sessionId: string, phone: string, message: string, userId: number) {
+ async sendTextMessage(sessionId: string, phone: string, message: string, userId: number) {
     const sid = sessionId || this.DEFAULT_SESSION_ID;
     const sock = this.sessions.get(sid);
-    if (!sock) throw new BadRequestException('ربات متصل نیست');
+
+    // 👇 تغییر مهم: علاوه بر sock، باید sock.user هم چک شود
+    if (!sock || !sock.user) {
+        throw new BadRequestException('ربات هنوز کاملاً متصل نشده است (در حال اتصال...)');
+    }
 
     let cleanPhone = phone.replace(/\D/g, '');
     if (cleanPhone.startsWith('09')) cleanPhone = '98' + cleanPhone.substring(1);
@@ -249,21 +293,62 @@ export class WhatsappService implements OnModuleInit {
         return { status: 'sent', phone: cleanPhone, messageId: sentMsg?.key?.id };
     } catch (error) {
         console.error('❌ Send Failed:', error);
-        throw new BadRequestException('خطا در ارسال پیام');
+        throw new BadRequestException('خطا در ارسال پیام: ارتباط با واتساپ برقرار نشد.');
     }
   }
+ // در فایل src/whatsapp/whatsapp.service.ts
 
-  async sendImageBuffer(sessionId: string, phone: string, fileBuffer: Buffer, caption: string, userId: number) {
+ // در فایل src/whatsapp/whatsapp.service.ts
+
+  async sendImageBuffer(sessionId: string, phone: string, fileBuffer: Buffer, caption: string, userId: number, retryCount = 0) {
       const sid = sessionId || this.DEFAULT_SESSION_ID;
+      
+      // تلاش برای دریافت سوکت جدید (شاید در تلاش قبلی سوکت عوض شده باشد)
       const sock = this.sessions.get(sid);
-      if (!sock) throw new BadRequestException('ربات متصل نیست');
+
+      // 🛑 اگر سوکت کلاً نابود شده بود یا اطلاعات کاربر نداشت
+      if ((!sock || !sock.user) && retryCount < 3) {
+          console.log(`⚠️ Robot appears offline. Waiting 5s for reconnection... (Attempt ${retryCount + 1}/3)`);
+          await new Promise(r => setTimeout(r, 5000)); // ۵ ثانیه صبر
+          return this.sendImageBuffer(sessionId, phone, fileBuffer, caption, userId, retryCount + 1);
+      }
+
+      if (!sock || !sock.user) {
+          throw new BadRequestException('ربات قطع است. لطفاً وضعیت اتصال را در داشبورد چک کنید.');
+      }
+
       let cleanPhone = phone.replace(/\D/g, '');
       if (cleanPhone.startsWith('09')) cleanPhone = '98' + cleanPhone.substring(1);
       const jid = `${cleanPhone}@s.whatsapp.net`;
-      await sock.sendMessage(jid, { image: fileBuffer, caption: caption });
-      return { status: 'sent' };
-  }
 
+      try {
+          console.log(`📷 Sending image to ${jid} (Attempt ${retryCount + 1})`);
+          
+          const sentMsg = await sock.sendMessage(jid, { 
+              image: fileBuffer, 
+              caption: caption 
+          });
+          
+          console.log('✅ Image Sent! ID:', sentMsg?.key?.id);
+          return { status: 'sent', messageId: sentMsg?.key?.id };
+
+      } catch (error: any) {
+          console.error(`❌ Send Failed (Attempt ${retryCount + 1}):`, error.message);
+
+          const isNetworkError = String(error).includes('Connection Closed') || 
+                                 String(error).includes('Timed Out') ||
+                                 String(error).includes('Stream Errored');
+          
+          // اگر خطا شبکه‌ای بود و هنوز ۳ بار تلاش نکرده‌ایم
+          if (isNetworkError && retryCount < 3) {
+              console.log(`🔄 Connection unstable. Retrying in 5 seconds...`);
+              await new Promise(r => setTimeout(r, 5000)); // ۵ ثانیه صبر برای تلاش مجدد
+              return this.sendImageBuffer(sessionId, phone, fileBuffer, caption, userId, retryCount + 1);
+          }
+          
+          throw new BadRequestException('خطا در ارسال عکس: ' + (error.message || 'ارتباط برقرار نشد'));
+      }
+  }
   async sendDocumentMessage(sessionId: string, phone: string, fileUrl: string, fileName: string, caption: string, userId: number) {
       return this.sendTextMessage(sessionId, phone, `${caption}\n\n📥 دانلود فایل: ${fileUrl}`, userId);
   }
@@ -281,12 +366,100 @@ export class WhatsappService implements OnModuleInit {
       return this.prisma.message.findMany({ where: { conversationId }, orderBy: { createdAt: 'asc' } });
   }
 
-  async setWebhook(sessionId: string, url: string, userId: number) {
-    const sid = sessionId || this.DEFAULT_SESSION_ID;
-    return this.prisma.session.upsert({ where: { id: sid }, update: { webhookUrl: url }, create: { id: sid, userId, status: 'DISCONNECTED', webhookUrl: url } });
+ async getWebhook(sessionId: string) {
+      const url = await this.webhookService.getUrl(sessionId);
+      return { url: url || '' };
   }
 
+  // ذخیره آدرس
+  async setWebhook(sessionId: string, url: string, userId: number) {
+      // اینجا منطق upsert دیتابیس شماست که قبلا نوشتید
+      const sid = sessionId || this.DEFAULT_SESSION_ID;
+      await this.prisma.session.upsert({ 
+          where: { id: sid }, 
+          update: { webhookUrl: url }, 
+          create: { id: sid, userId, status: 'DISCONNECTED', webhookUrl: url } 
+      });
+
+      // آپدیت کش در سرویس جدید
+      await this.webhookService.setUrl(sid, url);
+      return { status: 'success', url };
+  }
+
+// در فایل whatsapp.service.ts
+
+  async testWebhook(sessionId: string, customUrl?: string, type: 'text' | 'image' | 'status' = 'text') {
+      let targetUrl: string | null | undefined = customUrl;
+      if (!targetUrl) targetUrl = await this.webhookService.getUrl(sessionId);
+      if (!targetUrl) throw new BadRequestException('آدرس وب‌هوک مشخص نیست.');
+
+      const timestamp = Math.floor(Date.now() / 1000);
+      const msgId = 'TEST_ID_' + Date.now();
+
+      let changesValue: any = {
+          messaging_product: 'whatsapp',
+          metadata: { display_phone_number: '123456', phone_number_id: sessionId },
+      };
+
+      // 🔥 تولید دیتای فیک بر اساس سناریو
+      if (type === 'status') {
+          changesValue.statuses = [{
+              id: msgId,
+              status: 'read',
+              timestamp: timestamp,
+              recipient_id: '989123456789',
+              conversation: { id: 'CONV_ID', origin: { type: 'user_initiated' } },
+              pricing: { billable: true, pricing_model: 'CBP', category: 'business_initiated' }
+          }];
+      } else if (type === 'image') {
+          changesValue.messages = [{
+              from: '989123456789',
+              id: msgId,
+              timestamp: timestamp,
+              type: 'image',
+              image: {
+                  mime_type: 'image/jpeg',
+                  id: 'MEDIA_ID',
+                  caption: 'این یک عکس تستی است'
+              }
+          }];
+      } else {
+          // پیش‌فرض: متن
+          changesValue.messages = [{
+              from: '989123456789',
+              id: msgId,
+              timestamp: timestamp,
+              type: 'text',
+              text: { body: '✅ تست اتصال: این یک پیام متنی آزمایشی است.' }
+          }];
+      }
+
+      const testPayload = {
+          object: 'whatsapp_business_account',
+          entry: [{ id: sessionId, changes: [{ field: 'messages', value: changesValue }] }]
+      };
+      
+      try {
+          const axios = require('axios');
+          await axios.post(targetUrl, testPayload, { timeout: 10000 });
+          return { status: 'success', testedUrl: targetUrl, scenario: type };
+      } catch (error: any) {
+          throw new BadRequestException(`تست شکست خورد: ${error.message}`);
+      }
+  }
+
+  // حذف وب‌هوک
+  async deleteWebhook(sessionId: string) {
+      await this.prisma.session.update({
+          where: { id: sessionId },
+          data: { webhookUrl: null } // یا ''
+      });
+      await this.webhookService.setUrl(sessionId, '');
+      return { status: 'deleted' };
+  }
+ 
   private async saveSessionToDb(id: string, status: string, userId: number, phone?: string) {
       try { await this.prisma.session.upsert({ where: { id }, update: { status, phone }, create: { id, status, phone, userId } }); } catch (e) {}
   }
+  
 }
