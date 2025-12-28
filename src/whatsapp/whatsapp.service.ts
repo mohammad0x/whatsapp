@@ -269,31 +269,77 @@ export class WhatsappService implements OnModuleInit {
     } catch (error) { throw new BadRequestException('Failed to disconnect'); }
   }
 
- async sendTextMessage(sessionId: string, phone: string, message: string, userId: number) {
+ // در فایل src/whatsapp/whatsapp.service.ts
+
+  async sendTextMessage(sessionId: string, phone: string, message: string, userId: number) {
     const sid = sessionId || this.DEFAULT_SESSION_ID;
     const sock = this.sessions.get(sid);
 
-    // 👇 تغییر مهم: علاوه بر sock، باید sock.user هم چک شود
     if (!sock || !sock.user) {
-        throw new BadRequestException('ربات هنوز کاملاً متصل نشده است (در حال اتصال...)');
+        throw new BadRequestException('ربات هنوز متصل نشده است.');
     }
 
+    // 1. استانداردسازی شماره
     let cleanPhone = phone.replace(/\D/g, '');
     if (cleanPhone.startsWith('09')) cleanPhone = '98' + cleanPhone.substring(1);
-    if (cleanPhone.length < 10) throw new BadRequestException(`شماره نامعتبر: ${phone}`);
-
-    const jid = `${cleanPhone}@s.whatsapp.net`;
-    console.log(`🚀 Sending to: ${jid}`);
     
+    // بررسی صحت شماره در واتساپ
+    const jid = `${cleanPhone}@s.whatsapp.net`;
+    const [onWhats] = await sock.onWhatsApp(jid);
+    if (!onWhats?.exists) {
+        throw new BadRequestException(`شماره ${cleanPhone} در واتساپ وجود ندارد.`);
+    }
+
     try {
+        // 2. ارسال پیام به واتساپ
         await sock.sendPresenceUpdate('composing', jid);
         const sentMsg = await sock.sendMessage(jid, { text: message });
         await sock.sendPresenceUpdate('paused', jid);
-        console.log('✅ Sent! ID:', sentMsg?.key?.id);
+
+        // 3. 👇 ذخیره در دیتابیس (بخش جدید و مهم) 👇
+        
+        // الف) پیدا کردن یا ساختن مخاطب
+        let contact = await this.prisma.contact.findUnique({ where: { phone: cleanPhone } });
+        if (!contact) {
+            contact = await this.prisma.contact.create({ 
+                data: { phone: cleanPhone, pushName: 'Unknown' } 
+            });
+        }
+
+        // ب) پیدا کردن یا ساختن گفتگو
+        let conversation = await this.prisma.conversation.findFirst({ 
+            where: { contactId: contact.id, sessionId: sid } 
+        });
+        if (!conversation) {
+            conversation = await this.prisma.conversation.create({ 
+                data: { contactId: contact.id, sessionId: sid, status: 'OPEN' } 
+            });
+        }
+
+        // ج) ذخیره پیام
+        await this.prisma.message.create({
+            data: {
+                text: message,
+                type: 'text',
+                isFromMe: true,
+                sender: 'ME',
+                receiver: cleanPhone,
+                conversationId: conversation.id,
+                createdAt: new Date()
+            }
+        });
+
+        // د) آپدیت آخرین زمان پیام گفتگو
+        await this.prisma.conversation.update({
+            where: { id: conversation.id },
+            data: { lastMessageAt: new Date() }
+        });
+
         return { status: 'sent', phone: cleanPhone, messageId: sentMsg?.key?.id };
-    } catch (error) {
+
+    } catch (error: any) {
         console.error('❌ Send Failed:', error);
-        throw new BadRequestException('خطا در ارسال پیام: ارتباط با واتساپ برقرار نشد.');
+        throw new BadRequestException(`خطا در ارسال: ${error.message}`);
     }
   }
  // در فایل src/whatsapp/whatsapp.service.ts

@@ -27,16 +27,27 @@ export class AuthService {
   }
 
   async login(email: string, password: string) {
-    const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user) throw new UnauthorizedException('Invalid credentials');
+      // 1. پیدا کردن کاربر
+      const user = await this.prisma.user.findUnique({ where: { email } });
+      if (!user) throw new UnauthorizedException('Invalid credentials');
 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) throw new UnauthorizedException('Invalid credentials');
+      // 2. چک کردن رمز عبور
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) throw new UnauthorizedException('Invalid credentials');
 
-    const payload = { sub: user.id, email: user.email };
-    return {
-      access_token: this.jwtService.sign(payload),
-      user: { id: user.id, email: user.email, name: user.name } // بازگرداندن اطلاعات کاربر
-    };
-  }
+      // 3. ساخت توکن (نقش را در توکن هم قرار می‌دهیم)
+      const payload = { sub: user.id, email: user.email, role: user.role };
+
+      return {
+        access_token: this.jwtService.sign(payload),
+        
+        // 👇 این بخش مهم است: اطلاعاتی که به فرانت‌ند می‌رود
+        user: { 
+          id: user.id, 
+          email: user.email, 
+          name: user.name, 
+          role: user.role // ✅ این خط باعث می‌شود سایدبار درست کار کند
+        } 
+      };
+    }
 }

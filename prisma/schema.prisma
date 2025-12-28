@@ -12,6 +12,7 @@ model User {
   email           String    @unique
   password        String    
   name            String?
+  role     String  @default("ADMIN") // مقادیر: 'ADMIN', 'AGENT'
   
   // ✅ فیلدهای آینده‌نگرانه (SaaS Fields)
   plan            String    @default("FREE") // FREE, PRO, BUSINESS
@@ -46,7 +47,7 @@ model Agent {
   id        Int      @id @default(autoincrement())
   name      String
   email     String   @unique
-  password  String   
+ // password  String   
   role      String   @default("AGENT") 
   isOnline  Boolean  @default(false)
   avatar    String?  

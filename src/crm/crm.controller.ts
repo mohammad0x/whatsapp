@@ -1,7 +1,46 @@
-import { Body, Controller,Query, Get, Param, Patch, Post, UseGuards, Request } from '@nestjs/common';
+import { Body, Controller, Query, Get, Param, Patch, Post,UseGuards, Request } from '@nestjs/common';
 import { CrmService } from './crm.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiProperty } from '@nestjs/swagger';
+import { Delete ,ParseIntPipe} from '@nestjs/common'; 
+// 👇 کلاس‌های DTO برای نمایش در Swagger
+// در بالای فایل src/crm/crm.controller.ts
+
+// src/crm/crm.controller.ts
+
+class CreateAgentDto {
+  @ApiProperty({ example: 'Ali Rezaei', description: 'نام نمایشی' })
+  name: string;
+
+  @ApiProperty({ example: 'ali@example.com', description: 'ایمیل' })
+  email: string;
+
+  @ApiProperty({ example: '123456', description: 'رمز عبور' }) // 👈 این خط را اضافه کنید
+  password: string;
+}
+
+class ChangeStatusDto {
+  @ApiProperty({ example: 'CLOSED', description: 'وضعیت جدید (OPEN, CLOSED, PENDING)' })
+  status: string;
+}
+
+class AssignAgentDto {
+  @ApiProperty({ example: 1, description: 'شناسه اپراتور (Agent ID)' })
+  agentId: number;
+}
+
+class CreateTagDto {
+  @ApiProperty({ example: 'VIP', description: 'عنوان تگ' })
+  name: string;
+  @ApiProperty({ example: '#ff0000', description: 'کد رنگ' })
+  color: string;
+}
+
+class AddNoteDto {
+  @ApiProperty({ example: 'این مشتری نیاز به پیگیری دارد...', description: 'متن یادداشت' })
+  text: string;
+}
+
 
 @ApiTags('CRM & TeamInbox')
 @ApiBearerAuth()
@@ -13,75 +52,104 @@ export class CrmController {
   // 1️⃣ تغییر وضعیت چت
   @Patch('conversations/:id/status')
   @ApiOperation({ summary: 'تغییر وضعیت چت (OPEN/CLOSED)' })
-  async changeStatus(@Param('id') id: string, @Body('status') status: string) {
-    return this.crmService.updateConversationStatus(Number(id), status);
+  async changeStatus(@Param('id') id: string, @Body() body: ChangeStatusDto) {
+    return this.crmService.updateConversationStatus(Number(id), body.status);
   }
 
   // 2️⃣ اختصاص چت به ایجنت
   @Patch('conversations/:id/assign')
   @ApiOperation({ summary: 'اختصاص چت به یک اپراتور' })
-  async assignChat(@Param('id') id: string, @Body('agentId') agentId: number) {
-    return this.crmService.assignConversation(Number(id), agentId);
+  async assignChat(@Param('id') id: string, @Body() body: AssignAgentDto) {
+    return this.crmService.assignConversation(Number(id), body.agentId);
   }
 
   // 3️⃣ دریافت اطلاعات مشتری
   @Get('contacts/:phone')
-  @ApiOperation({ summary: 'دریافت پروفایل کامل مشتری' })
+  @ApiOperation({ summary: 'دریافت پروفایل کامل مشتری با شماره تلفن' })
   async getContact(@Param('phone') phone: string) {
     return this.crmService.getContactDetails(phone);
   }
 
-// 4️⃣ افزودن یادداشت برای مشتری
-@Post('contacts/:id/notes')
-@ApiOperation({ summary: 'افزودن یادداشت محرمانه' })
-async addNote(@Param('id') id: string, @Body() body: { text: string }, @Request() req) {
-  // گرفتن نام یا ایمیل کاربر از توکن JWT
-  const authorName = req.user.name || req.user.email || 'Unknown Agent';
-  return this.crmService.addNote(Number(id), body.text, authorName); 
-}
+  // 4️⃣ دریافت لیست مخاطبین (با جستجو)
+  @Get('contacts')
+  @ApiOperation({ summary: 'دریافت لیست مخاطبین (با قابلیت جستجو)' })
+  async getAllContacts(@Query('search') search?: string) {
+    return this.crmService.getContacts(search);
+  }
 
-  // 5️⃣ مدیریت تگ‌ها
+  // 5️⃣ افزودن یادداشت برای مشتری
+  @Post('contacts/:id/notes')
+  @ApiOperation({ summary: 'افزودن یادداشت محرمانه' })
+  async addNote(@Param('id') id: string, @Body() body: AddNoteDto, @Request() req) {
+    const authorName = req.user.name || req.user.email || 'Unknown Agent';
+    return this.crmService.addNote(Number(id), body.text, authorName); 
+  }
+
+  // 6️⃣ مدیریت تگ‌ها
   @Get('tags')
+  @ApiOperation({ summary: 'لیست تگ‌ها' })
   async getTags() {
     return this.crmService.getAllTags();
   }
 
   @Post('tags')
-  async createTag(@Body() body: { name: string; color: string }) {
+  @ApiOperation({ summary: 'ساخت تگ جدید' })
+  async createTag(@Body() body: CreateTagDto) {
     return this.crmService.createTag(body.name, body.color);
   }
 
   @Post('contacts/:id/tags')
+  @ApiOperation({ summary: 'افزودن تگ به مخاطب' })
   async addTag(@Param('id') id: string, @Body('tagId') tagId: number) {
     return this.crmService.addTagToContact(Number(id), tagId);
   }
 
-  // 6️⃣ پاسخ‌های آماده
+  // 7️⃣ پاسخ‌های آماده
   @Get('canned-responses')
+  @ApiOperation({ summary: 'لیست پاسخ‌های آماده کاربر' })
   async getCanned(@Request() req) {
     return this.crmService.getCannedResponses(req.user.userId);
   }
 
   @Post('canned-responses')
+  @ApiOperation({ summary: 'ساخت پاسخ آماده' })
   async createCanned(@Body() body: { shortcut: string; content: string }, @Request() req) {
     return this.crmService.createCannedResponse(req.user.userId, body.shortcut, body.content);
   }
 
-  // 7️⃣ مدیریت ایجنت‌ها
+  // 8️⃣ مدیریت ایجنت‌ها
   @Get('agents')
+  @ApiOperation({ summary: 'لیست اپراتورها' })
   async getAgents(@Request() req) {
     return this.crmService.getAgents(req.user.userId);
   }
 
   @Post('agents')
-  async createAgent(@Body() body: any, @Request() req) {
+  @ApiOperation({ summary: 'ساخت اپراتور جدید' })
+  async createAgent(@Body() body: CreateAgentDto, @Request() req) {
+    // اکنون Swagger می‌داند که باید { name: string } بفرستد
     return this.crmService.createAgent(req.user.userId, body);
   }
-    // در داخل کلاس CrmController اضافه کنید:
 
-  @Get('contacts')
-  @ApiOperation({ summary: 'دریافت لیست مخاطبین' })
-  async getAllContacts(@Query('search') search?: string) {
-    return this.crmService.getContacts(search);
+  @Delete('agents/:id')
+  @ApiOperation({ summary: 'حذف اپراتور' })
+  async deleteAgent(@Param('id') id: string) {
+    return this.crmService.deleteAgent(Number(id));
+  }
+
+  @Delete('contacts/:id/tags/:tagId')
+  @ApiOperation({ summary: 'حذف تگ از مخاطب' })
+  async removeTagFromContact(
+    @Param('id') id: string,
+    @Param('tagId') tagId: string
+  ) {
+    return this.crmService.removeTagFromContact(Number(id), Number(tagId));
+  }
+  
+  @Delete('canned-responses/:id') // 👈 آدرس دقیق
+  @ApiOperation({ summary: 'حذف پاسخ آماده' })
+  async deleteCannedResponse(@Param('id', ParseIntPipe) id: number) {
+    // ParseIntPipe خودکار id را به عدد تبدیل می‌کند
+    return this.crmService.deleteCannedResponse(id);
   }
 }
