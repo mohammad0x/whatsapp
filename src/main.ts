@@ -24,9 +24,11 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express'; // 👈 ۱. اضافه شده
+import { join } from 'path'; // 👈 ۲. اضافه شده
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // تنظیمات CORS (اختیاری ولی توصیه شده)
   app.enableCors({
@@ -36,6 +38,11 @@ async function bootstrap() {
   });
   app.useGlobalPipes(new ValidationPipe());
   // تنظیمات Swagger
+  
+  app.useStaticAssets(join(process.cwd(), 'uploads'), {
+    prefix: '/uploads/',
+  });
+
   const config = new DocumentBuilder()
     .setTitle('WhatsApp API')
     .setDescription('API Gateway for WhatsApp')

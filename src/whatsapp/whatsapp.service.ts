@@ -8,6 +8,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ChatbotService } from './chatbot.service';
 import { EventsGateway } from '../events.gateway';
 import { WebhookService } from './webhook.service'; 
+import { downloadMediaMessage } from '@whiskeysockets/baileys';  
+import { writeFile } from 'fs/promises';
 
 @Injectable()
 export class WhatsappService implements OnModuleInit {
@@ -172,19 +174,77 @@ export class WhatsappService implements OnModuleInit {
   }
 
   // ۴. پردازش پیام (با فلگ isHistory)
+  // نسخه اصلاح شده و هوشمند handleIncomingMessage
   private async handleIncomingMessage(sessionId: string, msg: any, sock: any, userId: number, isHistory = false) {
       const remoteJid = msg.key.remoteJid;
       if (!remoteJid || remoteJid === 'status@broadcast') return;
 
+      console.log('📨 New Message Received! ID:', msg.key.id); // لاگ ورود پیام
+
+      // 1. استخراج پیام واقعی (باز کردن لایه‌های اضافی واتساپ)
+      const messageContent = msg.message?.ephemeralMessage?.message || 
+                             msg.message?.viewOnceMessage?.message || 
+                             msg.message?.documentWithCaptionMessage?.message ||
+                             msg.message;
+      
+      if (!messageContent) return;
+
       let text = '';
       let msgType = 'text';
+      let mediaUrl: string | null = null;
 
-      if (msg.message?.conversation) text = msg.message.conversation;
-      else if (msg.message?.extendedTextMessage?.text) text = msg.message.extendedTextMessage.text;
-      else if (msg.message?.imageMessage) { msgType = 'image'; text = msg.message.imageMessage.caption || '[Image]'; }
-      else if (msg.message?.documentMessage) { msgType = 'document'; text = msg.message.documentMessage.caption || '[Document]'; }
+      // 2. تشخیص نوع پیام از محتوای استخراج شده
+      if (messageContent.conversation) {
+          text = messageContent.conversation;
+      } else if (messageContent.extendedTextMessage?.text) {
+          text = messageContent.extendedTextMessage.text;
+      } else if (messageContent.imageMessage) { 
+          msgType = 'image'; 
+          text = messageContent.imageMessage.caption || '[Image]'; 
+          console.log('📸 Image Message Detected'); 
+      } else if (messageContent.documentMessage) { 
+          msgType = 'document'; 
+          text = messageContent.documentMessage.caption || messageContent.documentMessage.fileName || '[Document]'; 
+          console.log('📄 Document Message Detected');
+      }
 
       if (!text && msgType === 'text') return; 
+
+      // 3. دانلود فایل مدیا (با استفاده از messageContent صحیح)
+      if (msgType === 'image' || msgType === 'document') {
+          console.log('⬇️ Attempting to download media...');
+          try {
+              // نکته مهم: برای دانلود باید کل آبجکت msg را اصلاح کنیم تا به مدیا اشاره کند
+              // اما downloadMediaMessage معمولا هوشمند است. اگر کار نکرد باید msg را دستکاری کرد.
+              // اینجا یک ترفند می‌زنیم:
+              const msgForDownload = { ...msg, message: messageContent };
+
+              const buffer = await downloadMediaMessage(
+                  msgForDownload, // استفاده از پیام باز شده
+                  'buffer',
+                  { },
+                  { logger: pino({ level: 'silent' }) as any, reuploadRequest: sock.updateMediaMessage }
+              );
+
+              const uploadDir = path.join(process.cwd(), 'uploads');
+              if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+              let ext = 'dat';
+              if (msgType === 'image') ext = 'jpg';
+              else if (messageContent.documentMessage?.mimetype?.includes('pdf')) ext = 'pdf';
+              else if (messageContent.documentMessage?.mimetype?.includes('word')) ext = 'docx';
+              
+              const fileName = `${msg.key.id}.${ext}`;
+              const filePath = path.join(uploadDir, fileName);
+              
+              await writeFile(filePath, buffer);
+              mediaUrl = `/uploads/${fileName}`; 
+              console.log(`✅ Media Saved: ${mediaUrl}`);
+
+          } catch (error) {
+              console.error('❌ Download Failed:', error);
+          }
+      }
 
       const isFromMe = msg.key.fromMe;
       const contactPhone = remoteJid.split('@')[0];
@@ -208,8 +268,12 @@ export class WhatsappService implements OnModuleInit {
 
       const savedMsg = await this.prisma.message.create({
           data: {
-              text, type: msgType, sender: isFromMe ? 'ME' : contactPhone,
-              receiver: isFromMe ? contactPhone : 'ME', isFromMe,
+              text, 
+              type: msgType, 
+              mediaUrl: mediaUrl, 
+              sender: isFromMe ? 'ME' : contactPhone,
+              receiver: isFromMe ? contactPhone : 'ME', 
+              isFromMe,
               conversationId: conversation.id,
               createdAt: msgTimestamp
           }
@@ -220,9 +284,7 @@ export class WhatsappService implements OnModuleInit {
           data: { lastMessageAt: msgTimestamp, unreadCount: isFromMe ? 0 : { increment: 1 } }
       });
 
-      // ارسال به فرانت (فقط اگر پیام زنده باشد)
       if (!isHistory) {
-          console.log(`📩 New Live Message: ${text}`);
           this.eventsGateway.sendMessageToClients('message:new', {
               conversationId: conversation.id,
               message: savedMsg,
