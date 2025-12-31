@@ -408,8 +408,22 @@ export class WhatsappService implements OnModuleInit {
       });
   }
 
+// در فایل src/whatsapp/whatsapp.service.ts
+
   async getConversationMessages(conversationId: number) {
-      return this.prisma.message.findMany({ where: { conversationId }, orderBy: { createdAt: 'asc' } });
+      // ۱. دریافت پیام‌ها (مثل قبل)
+      const messages = await this.prisma.message.findMany({ 
+          where: { conversationId }, 
+          orderBy: { createdAt: 'asc' } 
+      });
+
+      // ۲. 👇 این بخش جدید است: صفر کردن تعداد پیام‌های نخوانده
+      await this.prisma.conversation.update({
+          where: { id: conversationId },
+          data: { unreadCount: 0 } 
+      });
+
+      return messages;
   }
 
  async getWebhook(sessionId: string) {
