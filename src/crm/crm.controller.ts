@@ -3,6 +3,9 @@ import { CrmService } from './crm.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiProperty } from '@nestjs/swagger';
 import { Delete ,ParseIntPipe} from '@nestjs/common'; 
+import { Roles } from '../auth/roles.decorator'; // 👈 ایمپورت جدید
+import { RolesGuard } from '../auth/roles.guard'; //
+
 // 👇 کلاس‌های DTO برای نمایش در Swagger
 // در بالای فایل src/crm/crm.controller.ts
 
@@ -125,6 +128,8 @@ export class CrmController {
   }
 
   @Post('agents')
+  @UseGuards(RolesGuard) // 🛡️ فعال کردن گارد نقش
+  @Roles('ADMIN')        // 👮 فقط ادمین مجاز است
   @ApiOperation({ summary: 'ساخت اپراتور جدید' })
   async createAgent(@Body() body: CreateAgentDto, @Request() req) {
     // اکنون Swagger می‌داند که باید { name: string } بفرستد
@@ -132,6 +137,8 @@ export class CrmController {
   }
 
   @Delete('agents/:id')
+  @UseGuards(RolesGuard)
+  @Roles('ADMIN')
   @ApiOperation({ summary: 'حذف اپراتور' })
   async deleteAgent(@Param('id') id: string) {
     return this.crmService.deleteAgent(Number(id));
@@ -146,10 +153,10 @@ export class CrmController {
     return this.crmService.removeTagFromContact(Number(id), Number(tagId));
   }
   
-  @Delete('canned-responses/:id') // 👈 آدرس دقیق
+  @Delete('canned-responses/:id')
   @ApiOperation({ summary: 'حذف پاسخ آماده' })
-  async deleteCannedResponse(@Param('id', ParseIntPipe) id: number) {
-    // ParseIntPipe خودکار id را به عدد تبدیل می‌کند
-    return this.crmService.deleteCannedResponse(id);
+  async deleteCannedResponse(@Param('id', ParseIntPipe) id: number, @Request() req) {
+    // پاس دادن userId برای اطمینان از مالکیت
+    return this.crmService.deleteCannedResponse(id, req.user.userId);
   }
 }

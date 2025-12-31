@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable ,NotFoundException} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcrypt'; // برای هش کردن پسورد
 @Injectable()
@@ -156,15 +156,21 @@ async getContacts(search?: string) {
     });
   }
   // حذف پاسخ آماده
-  async deleteCannedResponse(id: number) {
-    // بررسی وجود آیتم قبل از حذف (اختیاری ولی توصیه می‌شود)
-    const exists = await this.prisma.cannedResponse.findUnique({ where: { id } });
-    if (!exists) {
-      throw new Error('آیتم یافت نشد');
-    }
+  // در CrmService
+ // در CrmService
+  async deleteCannedResponse(id: number, userId: number) { // userId اضافه شد
+      // استفاده از deleteMany با شرط userId (اگر پیدا نشود یا مال کاربر نباشد، حذف نمی‌کند)
+      const result = await this.prisma.cannedResponse.deleteMany({
+        where: { 
+          id: id,
+          userId: userId // 🔒 شرط امنیتی
+        },
+      });
 
-    return this.prisma.cannedResponse.delete({
-      where: { id },
-    });
-  }
+      if (result.count === 0) {
+        throw new NotFoundException('آیتم یافت نشد یا شما اجازه حذف آن را ندارید.');
+      }
+      
+      return { success: true };
+    }
 }
