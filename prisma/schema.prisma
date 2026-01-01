@@ -12,11 +12,10 @@ model User {
   email           String    @unique
   password        String    
   name            String?
-  role     String  @default("ADMIN") // مقادیر: 'ADMIN', 'AGENT'
+  role            String    @default("ADMIN") // مقادیر: 'ADMIN', 'AGENT'
   
-  // ✅ فیلدهای آینده‌نگرانه (SaaS Fields)
-  plan            String    @default("FREE") // FREE, PRO, BUSINESS
-  subscriptionEnd DateTime? // تاریخ انقضای اشتراک
+  plan            String    @default("FREE") 
+  subscriptionEnd DateTime?
   isActive        Boolean   @default(true)
   
   createdAt       DateTime  @default(now())
@@ -27,7 +26,6 @@ model User {
   cannedResponses CannedResponse[] 
 }
 
-// 🤖 ربات واتساپ
 model Session {
   id              String    @id
   status          String    
@@ -42,16 +40,14 @@ model Session {
   createdAt       DateTime  @default(now())
 }
 
-// 🕵️ اپراتور پشتیبانی (Agent)
 model Agent {
   id        Int      @id @default(autoincrement())
   name      String
   email     String   @unique
- // password  String   
   role      String   @default("AGENT") 
   isOnline  Boolean  @default(false)
-  avatar    String?  
-  signature String?  // ✅ جدید: امضای اختصاصی (مثلا: "ارادتمند، علی")
+  avatar    String?
+  signature String?  
   
   userId    Int      
   user      User     @relation(fields: [userId], references: [id])
@@ -60,21 +56,19 @@ model Agent {
   createdAt DateTime @default(now())
 }
 
-// ✅ جدید: پاسخ‌های آماده (Quick Reply)
 model CannedResponse {
   id        Int      @id @default(autoincrement())
-  shortcut  String   // مثلا: "card"
-  content   String   // متن طولانی پاسخ
+  shortcut  String   
+  content   String   
   
   userId    Int
   user      User     @relation(fields: [userId], references: [id])
 }
 
-// 📞 پروفایل مخاطب/مشتری
 model Contact {
   id          Int      @id @default(autoincrement())
   phone       String   @unique 
-  pushName    String?  
+  pushName    String?
   name        String?  
   avatarUrl   String?
   email       String?
@@ -86,10 +80,9 @@ model Contact {
   createdAt   DateTime @default(now())
 }
 
-// 📂 پرونده مکالمه
 model Conversation {
   id          Int       @id @default(autoincrement())
-  status      String    @default("OPEN") // OPEN, CLOSED, PENDING
+  status      String    @default("OPEN") 
   priority    String    @default("MEDIUM") 
   unreadCount Int       @default(0)
   
@@ -99,7 +92,7 @@ model Conversation {
   sessionId   String
   session     Session   @relation(fields: [sessionId], references: [id])
   
-  assignedTo  Int?      
+  assignedTo  Int?
   agent       Agent?    @relation(fields: [assignedTo], references: [id])
   
   messages    Message[] 
@@ -109,10 +102,10 @@ model Conversation {
   updatedAt     DateTime @updatedAt
 }
 
-// 📨 پیام
+// 📨 پیام (آپدیت شده)
 model Message {
   id        Int      @id @default(autoincrement())
-  text      String?  
+  text      String?
   type      String   
   
   sender    String   
@@ -121,6 +114,9 @@ model Message {
   
   mediaUrl  String?
   caption   String?
+
+  // 👇👇 این خط جدید و حیاتی است 👇👇
+  whatsappId String? @unique  
   
   conversationId Int
   conversation   Conversation @relation(fields: [conversationId], references: [id])
@@ -128,7 +124,6 @@ model Message {
   createdAt DateTime @default(now())
 }
 
-// 🏷️ برچسب‌ها
 model Tag {
   id        Int       @id @default(autoincrement())
   name      String    @unique
@@ -136,7 +131,6 @@ model Tag {
   contacts  Contact[]
 }
 
-// 📝 یادداشت‌های داخلی
 model Note {
   id        Int      @id @default(autoincrement())
   text      String
@@ -148,7 +142,6 @@ model Note {
   createdAt DateTime @default(now())
 }
 
-// 🔑 کلمات کلیدی (قدیمی)
 model Keyword {
   id        Int      @id @default(autoincrement())
   trigger   String
