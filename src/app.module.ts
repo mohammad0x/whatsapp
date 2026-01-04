@@ -7,7 +7,9 @@ import { AuthModule } from './auth/auth.module';
 import { CrmModule } from './crm/crm.module';
 import { QueueModule } from './queue/queue.module'; 
 import { EventsGateway } from './events.gateway';
-import { ConfigModule } from '@nestjs/config'; // ✅ ۱. این خط اضافه شود
+import { ConfigModule } from '@nestjs/config';
+import { OtpController } from './otp/otp.controller';
+import { OtpService } from './otp/otp.service';
 
 @Module({
   imports: [
@@ -17,7 +19,7 @@ import { ConfigModule } from '@nestjs/config'; // ✅ ۱. این خط اضافه
     CrmModule, // 👈 کاما فراموش نشود
     QueueModule // ✅ ماژول جدید
   ],
-  controllers: [AppController],
-  providers: [AppService, PrismaService,EventsGateway],
+  controllers: [AppController,OtpController],
+  providers: [AppService, PrismaService,EventsGateway,OtpService],
 })
 export class AppModule {}
