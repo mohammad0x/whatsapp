@@ -506,7 +506,7 @@ export class WhatsappService implements OnModuleInit {
         return { status: 'success', url };
     }
 
-    async testWebhook(sessionId: string, customUrl?: string, type: 'text' | 'image' | 'status' = 'text') {
+    async testWebhook(sessionId: string, customUrl?: string, type: 'text' | 'image' | 'status' = 'text', customText?: string) {
         let targetUrl: string | null | undefined = customUrl;
         if (!targetUrl) targetUrl = await this.webhookService.getUrl(sessionId);
         if (!targetUrl) throw new BadRequestException('آدرس وب‌هوک مشخص نیست.');
@@ -537,16 +537,21 @@ export class WhatsappService implements OnModuleInit {
                 image: {
                     mime_type: 'image/jpeg',
                     id: 'MEDIA_ID',
-                    caption: 'این یک عکس تستی است'
+                    // 👇 اگر متن داشت جایگزین کپشن کن
+                    caption: customText || 'این یک عکس تستی است'
                 }
             }];
         } else {
+            // حالت پیش‌فرض (text)
             changesValue.messages = [{
                 from: '989123456789',
                 id: msgId,
                 timestamp: timestamp,
                 type: 'text',
-                text: { body: '✅ تست اتصال: این یک پیام متنی آزمایشی است.' }
+                text: { 
+                    // 👇 اگر متن داشت آن را بفرست، وگرنه متن پیش‌فرض
+                    body: customText || '✅ تست اتصال: این یک پیام متنی آزمایشی است.' 
+                }
             }];
         }
 
@@ -558,7 +563,7 @@ export class WhatsappService implements OnModuleInit {
         try {
             const axios = require('axios');
             await axios.post(targetUrl, testPayload, { timeout: 10000 });
-            return { status: 'success', testedUrl: targetUrl, scenario: type };
+            return { status: 'success', testedUrl: targetUrl, scenario: type, sentText: customText || 'Default' };
         } catch (error: any) {
             throw new BadRequestException(`تست شکست خورد: ${error.message}`);
         }

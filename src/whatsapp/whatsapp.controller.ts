@@ -17,7 +17,7 @@ import { ApiBearerAuth, ApiConsumes, ApiBody, ApiOperation, ApiTags, ApiProperty
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FileInterceptor } from '@nestjs/platform-express'; 
 import { PrismaService } from '../prisma/prisma.service';
-
+import { IsOptional, IsString, IsEnum, IsUrl } from 'class-validator'; 
 // --- DTOs ---
 
 class StartSessionDto {}
@@ -58,19 +58,35 @@ class SendBulkDto {
 
 
 
-// کلاسی برای تعریف ورودی‌های تست وب‌هوک
- export class TestWebhookDto {
-  @ApiProperty({ required: false })
+export class TestWebhookDto {
+  @ApiProperty({ 
+    required: false, 
+    description: 'آدرس وب‌هوک برای تست (اگر خالی باشد از دیتابیس خوانده می‌شود)',
+    example: 'https://webhook.site/...'
+  })
+  @IsOptional()
+  @IsUrl()
   url?: string;
 
-  // 👇 اضافه کردن نوع تست
   @ApiProperty({ 
     required: false, 
     enum: ['text', 'image', 'status'],
-    description: 'نوع سناریوی تست',
+    description: 'نوع سناریوی تست (پیش‌فرض: text)',
     example: 'text'
   })
+  @IsOptional()
+  @IsEnum(['text', 'image', 'status'])
   type?: 'text' | 'image' | 'status';
+
+  // 👇 فیلد جدید برای متن دلخواه
+  @ApiProperty({ 
+    required: false, 
+    description: 'متن پیام یا کپشن عکس برای تست',
+    example: 'سلام! این یک متن تست اختصاصی است.'
+  })
+  @IsOptional()
+  @IsString()
+  text?: string;
 }
 
 // کلاسی برای تنظیم وب‌هوک (برای متد setWebhook هم بهتر است این کار را بکنید)
@@ -259,11 +275,17 @@ export class WhatsappController {
   async testWebhook(@Request() req, @Body() body: TestWebhookDto) {
     const userId = req.user.userId;
     const sessionId = `session_${userId}`;
-    // ارسال نوع تست به سرویس
-    return this.whatsappService.testWebhook(sessionId, body.url, body.type);
+    
+    // ✅ ارسال متن دلخواه (body.text) به عنوان پارامتر چهارم
+    return this.whatsappService.testWebhook(
+        sessionId, 
+        body.url, 
+        body.type, 
+        body.text // 👈 این خط اضافه شد
+    );
   }
 
-  // ۲. دریافت آدرس فعلی (برای نمایش در فرانت)
+  // ۲. دریافت آدرس فعلی (بدون تغییر)
   @Get('webhook')
   async getWebhook(@Request() req) {
     const userId = req.user.userId;

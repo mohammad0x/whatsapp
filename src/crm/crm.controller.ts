@@ -107,18 +107,6 @@ export class CrmController {
     return this.crmService.addTagToContact(Number(id), tagId);
   }
 
-  // 7️⃣ پاسخ‌های آماده
-  @Get('canned-responses')
-  @ApiOperation({ summary: 'لیست پاسخ‌های آماده کاربر' })
-  async getCanned(@Request() req) {
-    return this.crmService.getCannedResponses(req.user.userId);
-  }
-
-  @Post('canned-responses')
-  @ApiOperation({ summary: 'ساخت پاسخ آماده' })
-  async createCanned(@Body() body: { shortcut: string; content: string }, @Request() req) {
-    return this.crmService.createCannedResponse(req.user.userId, body.shortcut, body.content);
-  }
 
   // 8️⃣ مدیریت ایجنت‌ها
   @Get('agents')
