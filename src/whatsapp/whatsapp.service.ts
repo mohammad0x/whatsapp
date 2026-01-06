@@ -144,16 +144,39 @@ export class WhatsappService implements OnModuleInit {
     // پردازش پیام‌های ورودی
     private async handleIncomingMessage(sessionId: string, msg: any, sock: any, userId: number, isHistory = false) {
         const remoteJid = msg.key.remoteJid;
-        if (!remoteJid || remoteJid === 'status@broadcast') return;
+        if (!remoteJid || remoteJid === 'status@broadcast' || remoteJid.includes('@broadcast')) return;
 
-        // ✅ جلوگیری از تکرار پیام با استفاده از ID واتساپ
-        // نکته: فرض بر این است که شما فیلد whatsappId را به مدل اضافه کرده‌اید
+        const isFromMe = msg.key.fromMe;
+        
+        // ✅ تشخیص دقیق فرستنده (سازگار با گروه‌ها و LID)
+        let senderJid = remoteJid;
+        if (remoteJid.endsWith('@g.us')) {
+            // در گروه، فرستنده واقعی در participant است
+            if (!isFromMe) {
+                senderJid = msg.key.participant || msg.participant;
+            }
+        }
+        
+        if (!senderJid) return;
+
+        // استخراج شناسه (این می‌تواند شماره تلفن باشد یا LID طولانی)
+        const contactIdentifier = senderJid.split('@')[0];
+
+        // ❌ حذف گاردهای امنیتی قبلی: حالا ما همه چیز را قبول می‌کنیم
+
+        // استخراج نام
+        let pushName = 'Unknown';
+        if (!isFromMe) {
+            pushName = msg.pushName || msg.verifiedBizName || 'Unknown';
+        }
+
+        // جلوگیری از تکرار پیام
         const existingMsg = await this.prisma.message.findFirst({
             where: { whatsappId: msg.key.id }
         });
         if (existingMsg) return;
 
-        // استخراج محتوا
+        // استخراج محتوا (متن، عکس و ...)
         const messageContent = msg.message?.ephemeralMessage?.message ||
             msg.message?.viewOnceMessage?.message ||
             msg.message?.documentWithCaptionMessage?.message ||
@@ -165,64 +188,60 @@ export class WhatsappService implements OnModuleInit {
         let msgType = 'text';
         let mediaUrl: string | null = null;
 
-        if (messageContent.conversation) {
-            text = messageContent.conversation;
-        } else if (messageContent.extendedTextMessage?.text) {
-            text = messageContent.extendedTextMessage.text;
-        } else if (messageContent.imageMessage) {
-            msgType = 'image';
-            text = messageContent.imageMessage.caption || '[Image]';
-        } else if (messageContent.documentMessage) {
-            msgType = 'document';
-            text = messageContent.documentMessage.caption || messageContent.documentMessage.fileName || '[Document]';
-        }
+        if (messageContent.conversation) text = messageContent.conversation;
+        else if (messageContent.extendedTextMessage?.text) text = messageContent.extendedTextMessage.text;
+        else if (messageContent.imageMessage) { msgType = 'image'; text = messageContent.imageMessage.caption || '[Image]'; }
+        else if (messageContent.documentMessage) { msgType = 'document'; text = messageContent.documentMessage.caption || messageContent.documentMessage.fileName || '[Document]'; }
 
         if (!text && msgType === 'text') return;
 
-        // دانلود مدیا (ایمن سازی شده)
+        // دانلود مدیا (همان کد قبلی شما)
         if (msgType === 'image' || msgType === 'document') {
-            try {
+             try {
                 const buffer = await downloadMediaMessage(
                     msg,
                     'buffer',
                     {},
                     { logger: pino({ level: 'silent' }) as any, reuploadRequest: sock.updateMediaMessage }
                 );
-
-                // ✅ سازماندهی فایل‌ها در پوشه سال/ماه
                 const date = new Date();
                 const folderPath = path.join(process.cwd(), 'uploads', date.getFullYear().toString(), (date.getMonth() + 1).toString());
                 if (!fs.existsSync(folderPath)) fs.mkdirSync(folderPath, { recursive: true });
-
                 let ext = 'dat';
                 if (msgType === 'image') ext = 'jpg';
                 else if (messageContent.documentMessage?.mimetype?.includes('pdf')) ext = 'pdf';
                 else if (messageContent.documentMessage?.mimetype?.includes('word')) ext = 'docx';
-
-                // نام فایل ایمن
                 const safeFileName = `${msg.key.id.replace(/[^a-zA-Z0-9]/g, '')}.${ext}`;
                 const filePath = path.join(folderPath, safeFileName);
-
                 await writeFile(filePath, buffer);
-                // ذخیره مسیر نسبی
                 mediaUrl = `/uploads/${date.getFullYear()}/${date.getMonth() + 1}/${safeFileName}`;
-
             } catch (error) {
                 console.error('❌ Download Failed:', error);
             }
         }
 
-        const isFromMe = msg.key.fromMe;
-        const contactPhone = remoteJid.split('@')[0];
-
-        // مدیریت مخاطب و گفتگو
-        let contact = await this.prisma.contact.findUnique({ where: { phone: contactPhone } });
+        // ✅ مدیریت مخاطب (با استفاده از contactIdentifier که ممکن است LID باشد)
+        let contact = await this.prisma.contact.findUnique({ where: { phone: contactIdentifier } });
+        
         if (!contact) {
+            // ساخت مخاطب جدید با همان آیدی
             contact = await this.prisma.contact.create({
-                data: { phone: contactPhone, pushName: msg.pushName || 'Unknown' }
+                data: { 
+                    phone: contactIdentifier, 
+                    pushName: isFromMe ? 'Unknown' : pushName 
+                }
             });
+        } else {
+            // آپدیت نام
+            if (!isFromMe && pushName !== 'Unknown' && contact.pushName !== pushName) {
+                contact = await this.prisma.contact.update({
+                    where: { id: contact.id },
+                    data: { pushName: pushName }
+                });
+            }
         }
 
+        // مدیریت گفتگو
         let conversation = await this.prisma.conversation.findFirst({ where: { contactId: contact.id, sessionId } });
         if (!conversation) {
             conversation = await this.prisma.conversation.create({
@@ -238,16 +257,16 @@ export class WhatsappService implements OnModuleInit {
                 text,
                 type: msgType,
                 mediaUrl: mediaUrl,
-                sender: isFromMe ? 'ME' : contactPhone,
-                receiver: isFromMe ? contactPhone : 'ME',
+                sender: isFromMe ? 'ME' : contactIdentifier,
+                receiver: isFromMe ? contactIdentifier : 'ME',
                 isFromMe,
                 conversationId: conversation.id,
                 createdAt: msgTimestamp,
-                whatsappId: msg.key.id // ✅ ذخیره ID یکتا
+                whatsappId: msg.key.id 
             }
         });
 
-        // بروزرسانی گفتگو
+        // آپدیت وضعیت گفتگو
         await this.prisma.conversation.update({
             where: { id: conversation.id },
             data: {
@@ -263,11 +282,13 @@ export class WhatsappService implements OnModuleInit {
                 contact
             });
 
-            if (!isFromMe && msgType === 'text') {
+            // ✅ پاسخ ربات: استفاده از تابع sendTextMessage که حالا LID را می‌شناسد
+            if (!isFromMe && msgType === 'text' && !remoteJid.endsWith('@g.us')) {
                 const botResponse = await this.chatbotService.getResponse(userId, text);
                 if (botResponse) {
                     await new Promise(r => setTimeout(r, 2000));
-                    await sock.sendMessage(remoteJid, { text: botResponse });
+                    // اینجا contactIdentifier (که شاید LID باشد) پاس داده می‌شود و بدون خطا کار می‌کند
+                    await this.sendTextMessage(sessionId, contactIdentifier, botResponse, userId);
                 }
             }
         }
@@ -344,13 +365,32 @@ export class WhatsappService implements OnModuleInit {
             throw new BadRequestException('ربات هنوز متصل نشده است.');
         }
 
-        let cleanPhone = phone.replace(/\D/g, '');
-        if (cleanPhone.startsWith('09')) cleanPhone = '98' + cleanPhone.substring(1);
+        // تمیزکاری ورودی (فقط اعداد)
+        let cleanPhone = String(phone).replace(/\D/g, '');
+        let jid;
 
-        const jid = `${cleanPhone}@s.whatsapp.net`;
-        const [onWhats] = await sock.onWhatsApp(jid);
-        if (!onWhats?.exists) {
-            throw new BadRequestException(`شماره ${cleanPhone} در واتساپ وجود ندارد.`);
+        // ✅ تغییر استراتژی: تشخیص هوشمند (شماره تلفن یا LID)
+        if (cleanPhone.length > 14) {
+            // اگر طولانی بود (بیشتر از ۱۴ رقم)، یعنی LID است
+            console.log(`ℹ️ Sending message to LID: ${cleanPhone}`);
+            jid = `${cleanPhone}@lid`; // فرمت مخصوص LID
+        } else {
+            // اگر کوتاه بود، یعنی شماره تلفن معمولی است
+            if (cleanPhone.startsWith('09')) cleanPhone = '98' + cleanPhone.substring(1);
+            else if (cleanPhone.startsWith('0098')) cleanPhone = cleanPhone.substring(2);
+
+            if (cleanPhone.length < 10) {
+                throw new BadRequestException(`شماره تلفن نامعتبر (خیلی کوتاه): ${cleanPhone}`);
+            }
+            jid = `${cleanPhone}@s.whatsapp.net`; // فرمت مخصوص شماره تلفن
+        }
+
+        // بررسی وجود شماره (فقط برای شماره‌های موبایل، چون LID همیشه معتبر است)
+        if (!jid.includes('@lid')) {
+            const [onWhats] = await sock.onWhatsApp(jid);
+            if (!onWhats?.exists) {
+                throw new BadRequestException(`شماره ${cleanPhone} در واتساپ وجود ندارد.`);
+            }
         }
 
         try {
@@ -358,6 +398,7 @@ export class WhatsappService implements OnModuleInit {
             const sentMsg = await sock.sendMessage(jid, { text: message });
             await sock.sendPresenceUpdate('paused', jid);
 
+            // ذخیره در دیتابیس (همان cleanPhone را ذخیره می‌کنیم، چه شماره باشد چه LID)
             let contact = await this.prisma.contact.findUnique({ where: { phone: cleanPhone } });
             if (!contact) {
                 contact = await this.prisma.contact.create({ data: { phone: cleanPhone, pushName: 'Unknown' } });
@@ -377,7 +418,7 @@ export class WhatsappService implements OnModuleInit {
                     receiver: cleanPhone,
                     conversationId: conversation.id,
                     createdAt: new Date(),
-                    whatsappId: sentMsg?.key?.id // ✅ ذخیره ID پیام ارسالی
+                    whatsappId: sentMsg?.key?.id 
                 }
             });
 
