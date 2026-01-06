@@ -18,6 +18,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FileInterceptor } from '@nestjs/platform-express'; 
 import { PrismaService } from '../prisma/prisma.service';
 import { IsOptional, IsString, IsEnum, IsUrl } from 'class-validator'; 
+
 // --- DTOs ---
 
 class StartSessionDto {}
@@ -56,54 +57,38 @@ class SendBulkDto {
   mediaUrl?: string;
 }
 
-
-
 export class TestWebhookDto {
-  @ApiProperty({ 
-    required: false, 
-    description: 'آدرس وب‌هوک برای تست (اگر خالی باشد از دیتابیس خوانده می‌شود)',
-    example: 'https://webhook.site/...'
-  })
+  @ApiProperty({ required: false, description: 'آدرس وب‌هوک برای تست', example: 'https://webhook.site/...' })
   @IsOptional()
   @IsUrl()
   url?: string;
 
-  @ApiProperty({ 
-    required: false, 
-    enum: ['text', 'image', 'status'],
-    description: 'نوع سناریوی تست (پیش‌فرض: text)',
-    example: 'text'
-  })
+  @ApiProperty({ required: false, enum: ['text', 'image', 'status'], description: 'نوع سناریوی تست', example: 'text' })
   @IsOptional()
   @IsEnum(['text', 'image', 'status'])
   type?: 'text' | 'image' | 'status';
 
-  // 👇 فیلد جدید برای متن دلخواه
-  @ApiProperty({ 
-    required: false, 
-    description: 'متن پیام یا کپشن عکس برای تست',
-    example: 'سلام! این یک متن تست اختصاصی است.'
-  })
+  @ApiProperty({ required: false, description: 'متن پیام تست اختصاصی', example: 'سلام تست' })
   @IsOptional()
   @IsString()
   text?: string;
 }
 
-// کلاسی برای تنظیم وب‌هوک (برای متد setWebhook هم بهتر است این کار را بکنید)
 export class SetWebhookDto {
-  @ApiProperty({ 
-    required: true, 
-    description: 'آدرس کامل وب‌هوک',
-    example: 'https://example.com/api/webhook' 
-  })
+  @ApiProperty({ required: true, description: 'آدرس کامل وب‌هوک', example: 'https://example.com/api/webhook' })
   url: string;
 }
 
 class AddKeywordDto {
-  @ApiProperty({ description: 'کلمه کلیدی' })
+  @ApiProperty({ description: 'کلمه کلیدی', example: 'قیمت' })
   trigger: string;
-  @ApiProperty({ description: 'پاسخ ربات' })
+  @ApiProperty({ description: 'پاسخ ربات', example: 'قیمت محصول ۱۰۰ تومان است' })
   response: string;
+}
+
+class ToggleAiDto {
+  @ApiProperty({ description: 'وضعیت هوش مصنوعی', example: true })
+  enabled: boolean;
 }
 
 // --- Controller Logic ---
@@ -119,10 +104,9 @@ export class WhatsappController {
     private readonly queueService: QueueService
   ) {}
 
-  private getSessionId(req: any): string {
-    return `session_${req.user.userId}`;
+private getSessionId(req: any): string {
+    return 'session_1'; 
   }
-
   // ==========================================
   // 1️⃣ مدیریت اتصال
   // ==========================================
@@ -144,11 +128,12 @@ export class WhatsappController {
   }
 
   @Delete('session')
+  @ApiOperation({ summary: 'قطع اتصال ربات' })
   async disconnect(@Request() req) {
     const sessionId = this.getSessionId(req);
-    await this.whatsappService.disconnect(sessionId); // 👈 آیدی پاس داده شد
+    await this.whatsappService.disconnect(sessionId);
     return { status: 'DISCONNECTED', message: 'Session removed' };
-}
+  }
 
   // ==========================================
   // 2️⃣ ارسال پیام
@@ -170,45 +155,17 @@ export class WhatsappController {
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'ارسال عکس' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        phone: { type: 'string' },
-        caption: { type: 'string' },
-        file: { type: 'string', format: 'binary' },
-      },
-    },
-  })
-  async uploadImage(
-    @Body() body: UploadImageDto,
-    @UploadedFile() file: Express.Multer.File,
-    @Request() req
-  ) {
+  async uploadImage(@Body() body: UploadImageDto, @UploadedFile() file: Express.Multer.File, @Request() req) {
     if (!file) throw new BadRequestException('❌ لطفا فایل انتخاب کنید');
     const sessionId = this.getSessionId(req);
-    
-    return this.whatsappService.sendImageBuffer(
-        sessionId,
-        body.phone,
-        file.buffer,
-        body.caption || '',
-        req.user.userId
-    );
+    return this.whatsappService.sendImageBuffer(sessionId, body.phone, file.buffer, body.caption || '', req.user.userId);
   }
 
   @Post('send-file')
   @ApiOperation({ summary: 'ارسال فایل با لینک' })
   async sendFile(@Body() body: SendFileDto, @Request() req) {
     const sessionId = this.getSessionId(req);
-    return this.whatsappService.sendDocumentMessage(
-        sessionId, 
-        body.phone, 
-        body.fileUrl, 
-        body.fileName, 
-        body.caption || '', 
-        req.user.userId
-    );
+    return this.whatsappService.sendDocumentMessage(sessionId, body.phone, body.fileUrl, body.fileName, body.caption || '', req.user.userId);
   }
 
   // ==========================================
@@ -219,20 +176,8 @@ export class WhatsappController {
   @ApiOperation({ summary: 'ارسال انبوه هوشمند' })
   async sendBulk(@Body() body: SendBulkDto, @Request() req) {
     const sessionId = this.getSessionId(req);
-    
-    const result = await this.queueService.addBulkCampaign(
-        req.user.userId,
-        sessionId,
-        body.phones,
-        body.message,
-        body.mediaUrl
-    );
-
-    return { 
-        success: true,
-        message: 'کمپین ارسال انبوه در صف قرار گرفت.',
-        queueDetails: result 
-    };
+    const result = await this.queueService.addBulkCampaign(req.user.userId, sessionId, body.phones, body.message, body.mediaUrl);
+    return { success: true, message: 'کمپین ارسال انبوه در صف قرار گرفت.', queueDetails: result };
   }
 
   // ==========================================
@@ -240,10 +185,11 @@ export class WhatsappController {
   // ==========================================
 
   @Get('conversations')
-  @ApiOperation({ summary: 'دریافت لیست چت‌ها' })
+  @ApiOperation({ summary: 'دریافت لیست چت‌ها (فیلتر شده برای ایجنت)' })
   async getConversations(@Request() req) {
     const sessionId = this.getSessionId(req);
-    return this.whatsappService.getConversations(sessionId);
+    // 👇 تغییر: ارسال req.user به سرویس
+    return this.whatsappService.getConversations(sessionId, req.user);
   }
 
   @Get('messages/:id') 
@@ -253,68 +199,71 @@ export class WhatsappController {
   }
 
   // ==========================================
-  // 5️⃣ تنظیمات
+  // 5️⃣ وب‌هوک (Webhook)
   // ==========================================
 
-// ... داخل کلاس WhatsappController ...
-
-  // ۱. تنظیم وب‌هوک
   @Post('webhook')
   @ApiOperation({ summary: 'تنظیم آدرس وب‌هوک' })
-  // 👇 استفاده از DTO
   async setWebhook(@Request() req, @Body() body: SetWebhookDto) {
     const userId = req.user.userId;
-    const sessionId = `session_${userId}`;
+    const sessionId = this.getSessionId(req);
     return this.whatsappService.setWebhook(sessionId, body.url, userId);
   }
 
-  // ... متدهای GET و DELETE ...
-
-  // ۳. تست وب‌هوک
   @Post('webhook/test')
+  @ApiOperation({ summary: 'تست وب‌هوک' })
   async testWebhook(@Request() req, @Body() body: TestWebhookDto) {
-    const userId = req.user.userId;
-    const sessionId = `session_${userId}`;
-    
-    // ✅ ارسال متن دلخواه (body.text) به عنوان پارامتر چهارم
-    return this.whatsappService.testWebhook(
-        sessionId, 
-        body.url, 
-        body.type, 
-        body.text // 👈 این خط اضافه شد
-    );
+    const sessionId = this.getSessionId(req);
+    return this.whatsappService.testWebhook(sessionId, body.url, body.type, body.text);
   }
 
-  // ۲. دریافت آدرس فعلی (بدون تغییر)
   @Get('webhook')
+  @ApiOperation({ summary: 'دریافت آدرس وب‌هوک فعلی' })
   async getWebhook(@Request() req) {
-    const userId = req.user.userId;
-    const sessionId = `session_${userId}`;
+    const sessionId = this.getSessionId(req);
     return this.whatsappService.getWebhook(sessionId);
   }
 
-
-  // ۴. حذف وب‌هوک
   @Delete('webhook')
+  @ApiOperation({ summary: 'حذف وب‌هوک' })
   async deleteWebhook(@Request() req) {
-    const userId = req.user.userId;
-    const sessionId = `session_${userId}`;
+    const sessionId = this.getSessionId(req);
     return this.whatsappService.deleteWebhook(sessionId);
   }
 
+  // ==========================================
+  // 6️⃣ کلمات کلیدی (Keywords)
+  // ==========================================
+
   @Post('keywords')
-  @ApiOperation({ summary: 'افزودن کلمه کلیدی' })
+  @ApiOperation({ summary: 'افزودن یا آپدیت کلمه کلیدی' })
   async addKeyword(@Body() body: AddKeywordDto, @Request() req) {
+    const userId = req.user.userId;
+    const cleanTrigger = body.trigger.trim().toLowerCase();
+
+    // اگر کلمه تکراری بود، آپدیت کن (به جای خطا دادن)
+    const existing = await this.prisma.keyword.findFirst({
+        where: { userId, trigger: cleanTrigger }
+    });
+
+    if (existing) {
+        return this.prisma.keyword.update({
+            where: { id: existing.id },
+            data: { response: body.response }
+        });
+    }
+
     return this.prisma.keyword.create({
       data: {
-        trigger: body.trigger.toLowerCase().trim(),
+        trigger: cleanTrigger,
         response: body.response,
-        userId: req.user.userId,
+        userId: userId,
       },
     });
   }
 
   @Get('keywords')
+  @ApiOperation({ summary: 'لیست کلمات کلیدی' })
   async getKeywords(@Request() req) {
     return this.prisma.keyword.findMany({
       where: { userId: req.user.userId },
@@ -323,12 +272,57 @@ export class WhatsappController {
   }
 
   @Delete('keywords/:id')
+  @ApiOperation({ summary: 'حذف کلمه کلیدی' })
   async deleteKeyword(@Param('id') id: string, @Request() req) {
-    return this.prisma.keyword.delete({
+    // استفاده از deleteMany برای امنیت (مطمئن شویم مال خود کاربر است)
+    const result = await this.prisma.keyword.deleteMany({
       where: { 
         id: Number(id),
         userId: req.user.userId 
       },
     });
+    
+    if (result.count === 0) throw new BadRequestException('کلمه یافت نشد.');
+    return { status: 'deleted', id };
+  }
+
+  // ==========================================
+  // 7️⃣ هوش مصنوعی (AI Management)
+  // ==========================================
+
+  @Post('ai/toggle')
+  @ApiOperation({ summary: 'روشن یا خاموش کردن هوش مصنوعی' })
+  async toggleAI(@Body() body: ToggleAiDto, @Request() req) {
+    const userId = req.user.userId;
+    const sessionId = this.getSessionId(req);
+
+    // مطمئن می‌شویم سشن وجود دارد
+    const session = await this.prisma.session.upsert({
+        where: { id: sessionId },
+        create: { 
+            id: sessionId, 
+            userId: userId, 
+            status: 'DISCONNECTED', 
+            aiEnabled: body.enabled 
+        },
+        update: { aiEnabled: body.enabled }
+    });
+
+    return { 
+        status: 'success', 
+        aiEnabled: session.aiEnabled, 
+        message: session.aiEnabled ? 'هوش مصنوعی فعال شد' : 'هوش مصنوعی غیرفعال شد' 
+    };
+  }
+
+  @Get('ai/status')
+  @ApiOperation({ summary: 'بررسی وضعیت فعلی هوش مصنوعی' })
+  async getAiStatus(@Request() req) {
+    const sessionId = this.getSessionId(req);
+    const session = await this.prisma.session.findUnique({
+        where: { id: sessionId },
+        select: { aiEnabled: true }
+    });
+    return { aiEnabled: session?.aiEnabled || false };
   }
 }

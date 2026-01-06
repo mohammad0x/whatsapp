@@ -1,0 +1,7 @@
+-- AlterTable
+ALTER TABLE "Agent" ADD COLUMN     "canSendFile" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN     "canSendImage" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN     "canSendMessage" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN     "canUseOtp" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "canViewContacts" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN     "canViewInbox" BOOLEAN NOT NULL DEFAULT true;

@@ -18,8 +18,26 @@ class CreateAgentDto {
   @ApiProperty({ example: 'ali@example.com', description: 'ایمیل' })
   email: string;
 
-  @ApiProperty({ example: '123456', description: 'رمز عبور' }) // 👈 این خط را اضافه کنید
+  @ApiProperty({ example: '123456', description: 'رمز عبور' }) 
   password: string;
+
+  @ApiProperty({ example: true, description: 'دسترسی ارسال پیام فوری' })
+  canSendMessage: boolean;
+
+  @ApiProperty({ example: true, description: 'دسترسی ارسال تصویر' })
+  canSendImage: boolean;
+
+  @ApiProperty({ example: true, description: 'دسترسی ارسال فایل' })
+  canSendFile: boolean;
+
+  @ApiProperty({ example: true, description: 'دسترسی مشاهده صندوق تیم' })
+  canViewInbox: boolean;
+
+  @ApiProperty({ example: true, description: 'دسترسی مشاهده مخاطبین' })
+  canViewContacts: boolean;
+
+  @ApiProperty({ example: false, description: 'دسترسی سرویس OTP' })
+  canUseOtp: boolean;
 }
 
 class ChangeStatusDto {
@@ -73,11 +91,11 @@ export class CrmController {
     return this.crmService.getContactDetails(phone);
   }
 
-  // 4️⃣ دریافت لیست مخاطبین (با جستجو)
   @Get('contacts')
-  @ApiOperation({ summary: 'دریافت لیست مخاطبین (با قابلیت جستجو)' })
-  async getAllContacts(@Query('search') search?: string) {
-    return this.crmService.getContacts(search);
+  @ApiOperation({ summary: 'دریافت مخاطبین (محدود به ایجنت)' })
+  async getAllContacts(@Query('search') search: string, @Request() req) { // 👈 افزودن @Request
+    // ارسال اطلاعات کاربر به سرویس
+    return this.crmService.getContacts(search, req.user);
   }
 
   // 5️⃣ افزودن یادداشت برای مشتری
@@ -111,8 +129,8 @@ export class CrmController {
   // 8️⃣ مدیریت ایجنت‌ها
   @Get('agents')
   @ApiOperation({ summary: 'لیست اپراتورها' })
-  async getAgents(@Request() req) {
-    return this.crmService.getAgents(req.user.userId);
+  async getAgents() {
+    return this.crmService.getAgents();
   }
 
   @Post('agents')
@@ -130,6 +148,11 @@ export class CrmController {
   @ApiOperation({ summary: 'حذف اپراتور' })
   async deleteAgent(@Param('id') id: string) {
     return this.crmService.deleteAgent(Number(id));
+  }
+
+  @Patch('agents/:id')
+  async updateAgent(@Param('id') id: string, @Body() body: any) {
+    return this.crmService.updateAgent(Number(id), body);
   }
 
   @Delete('contacts/:id/tags/:tagId')

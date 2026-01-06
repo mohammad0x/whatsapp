@@ -1,4 +1,4 @@
-import { Injectable ,NotFoundException} from '@nestjs/common';
+import { Injectable ,ForbiddenException,NotFoundException} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcrypt'; // برای هش کردن پسورد
 @Injectable()
@@ -88,59 +88,113 @@ export class CrmService {
 
   // --- مدیریت ایجنت‌ها ---
   
-  async createAgent(adminUserId: number, data: any) {
-  // 1. ابتدا پسورد را هش می‌کنیم
-  const hashedPassword = await bcrypt.hash(data.password, 10);
+  // در فایل src/crm/crm.service.ts
 
-  // 2. ساخت یک کاربر جدید در جدول User برای اینکه بتواند لاگین کند
-  const newUser = await this.prisma.user.create({
-    data: {
-      email: data.email,
-      password: hashedPassword,
-      name: data.name,
-      role: 'AGENT', // 👈 نقش او را ایجنت می‌گذاریم
-    }
-  });
+  async createAgent(adminUserId: number, data: any) { // data شامل دسترسی‌ها هم هست
+    // 1. هش کردن پسورد
+    const hashedPassword = await bcrypt.hash(data.password, 10);
 
-  // 3. حالا پروفایل ایجنت را می‌سازیم و به آن یوزر وصل می‌کنیم
-  // (نکته: در مدل Agent باید فیلدی برای ارتباط با User داشته باشید یا صرفاً از همان User استفاده کنید)
-  return this.prisma.agent.create({
-    data: {
-      name: data.name,
-      email: data.email,
-      userId: adminUserId, // این نشان می‌دهد چه کسی او را ساخته (ادمین)
-      // اگر می‌خواهید لاگین ایجنت به پروفایلش وصل شود، باید یک relation جدید در prisma بسازید
-      // اما برای سادگی فعلا همین کافیست.
-    }
-  });
-}
-   // در داخل کلاس CrmService اضافه کنید:
+    // 2. ساخت یوزر جدید
+    const newUser = await this.prisma.user.create({
+      data: {
+        email: data.email,
+        password: hashedPassword,
+        name: data.name,
+        role: 'AGENT',
+      }
+    });
 
-async getContacts(search?: string) {
-  return this.prisma.contact.findMany({
-    where: search ? {
-      OR: [
-        { phone: { contains: search } },
-        { pushName: { contains: search } }
-      ]
-    } : undefined,
-    include: {
-      tags: true,
-      _count: { select: { conversations: true } } // تعداد مکالمات
-    },
-    orderBy: { createdAt: 'desc' }
-  });
-}
+    // 3. ساخت پروفایل ایجنت با دسترسی‌های مشخص شده
+    return this.prisma.agent.create({
+      data: {
+        name: data.name,
+        email: data.email,
+        userId: newUser.id, // ✅ اتصال صحیح به یوزر جدید
 
-  async getAgents(userId: number) {
-    return this.prisma.agent.findMany({
-      where: { userId }
+        // 👇 ذخیره دسترسی‌ها
+        canSendMessage: data.canSendMessage ?? true, // اگر خالی بود پیش‌فرض true
+        canSendImage: data.canSendImage ?? true,
+        canSendFile: data.canSendFile ?? true,
+        canViewInbox: data.canViewInbox ?? true,
+        canViewContacts: data.canViewContacts ?? true,
+        canUseOtp: data.canUseOtp ?? false,
+      }
     });
   }
+
+  async getContacts(search?: string, user?: any) {
+    const where: any = {};
+
+    // 1. فیلتر جستجو
+    if (search) {
+      where.OR = [
+        { phone: { contains: search } },
+        { pushName: { contains: search } }
+      ];
+    }
+
+    // 2. فیلتر امنیتی ایجنت
+    if (user && user.role === 'AGENT') {
+       const agent = await this.prisma.agent.findFirst({ where: { userId: user.userId } });
+       
+       if (agent) {
+           // 🔒 چک کردن "مجوز دسترسی" (Permission)
+           // اگر تیک "مشاهده مخاطبین" برای این ایجنت خاموش باشد، ارور می‌دهد.
+           if (agent.canViewContacts === false) {
+               throw new ForbiddenException('⛔ شما مجوز دسترسی به لیست مخاطبین را ندارید.');
+           }
+
+           // اگر مجوز داشت، حالا فقط چت‌های خودش را می‌بیند
+           where.conversations = {
+               some: {
+                   assignedTo: agent.id 
+               }
+           };
+       } else {
+           // اگر ایجنت پروفایل نداشت
+           return [];
+       }
+    }
+
+    // دریافت اطلاعات
+    return this.prisma.contact.findMany({
+      where,
+      include: {
+        tags: true,
+        _count: { select: { conversations: true } }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+  }
+
+  async getAgents() {
+    return this.prisma.agent.findMany(); 
+  }
   // حذف ایجنت
+  // در فایل src/crm/crm.service.ts
+
   async deleteAgent(agentId: number) {
-    return this.prisma.agent.delete({
+    // ۱. ابتدا خود ایجنت را پیدا می‌کنیم تا userId او را بفهمیم
+    const agent = await this.prisma.agent.findUnique({
       where: { id: agentId },
+      select: { userId: true } // فقط userId را لازم داریم
+    });
+
+    if (!agent) {
+      throw new NotFoundException('Agent not found');
+    }
+
+    // ۲. استفاده از Transaction برای حذف همزمان ایجنت و یوزر
+    return this.prisma.$transaction(async (prisma) => {
+      // اول: حذف پروفایل ایجنت
+      await prisma.agent.delete({
+        where: { id: agentId },
+      });
+
+      // دوم: حذف اکانت کاربری (User) متصل به آن
+      await prisma.user.delete({
+        where: { id: agent.userId },
+      });
     });
   }
 
@@ -173,4 +227,43 @@ async getContacts(search?: string) {
       
       return { success: true };
     }
+    async updateAgent(id: number, data: any) {
+    // ۱. ابتدا ایجنت را پیدا می‌کنیم تا userId او را داشته باشیم
+    const agent = await this.prisma.agent.findUnique({ where: { id } });
+    if (!agent) throw new NotFoundException('ایجنت یافت نشد');
+
+    // ۲. آماده‌سازی داده‌های آپدیت برای جدول User (ایمیل و پسورد)
+    const userData: any = {};
+    if (data.email) userData.email = data.email;
+    
+    // فقط اگر پسورد جدید ارسال شده بود، آن را هش کن و آپدیت کن
+    if (data.password && data.password.length > 0) {
+      userData.password = await bcrypt.hash(data.password, 10);
+    }
+
+    // آپدیت جدول User (اگر تغییری داشتیم)
+    if (Object.keys(userData).length > 0) {
+      await this.prisma.user.update({
+        where: { id: agent.userId },
+        data: userData
+      });
+    }
+
+    // ۳. آپدیت جدول Agent (نام و دسترسی‌ها)
+    return this.prisma.agent.update({
+      where: { id },
+      data: {
+        name: data.name,
+        email: data.email, // ایمیل را اینجا هم نگه می‌داریم برای نمایش سریع
+        
+        // آپدیت دسترسی‌ها
+        canSendMessage: data.canSendMessage,
+        canSendImage: data.canSendImage,
+        canSendFile: data.canSendFile,
+        canViewInbox: data.canViewInbox,
+        canViewContacts: data.canViewContacts,
+        canUseOtp: data.canUseOtp,
+      }
+    });
+  }
 }

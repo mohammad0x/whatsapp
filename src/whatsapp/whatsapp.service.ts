@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, BadRequestException } from '@nestjs/common';
+import { Injectable, ForbiddenException,OnModuleInit, BadRequestException } from '@nestjs/common';
 import makeWASocket, { DisconnectReason, useMultiFileAuthState, WAMessageStatus } from '@whiskeysockets/baileys';
 import * as QRCode from 'qrcode';
 import * as fs from 'fs';
@@ -365,27 +365,38 @@ export class WhatsappService implements OnModuleInit {
             throw new BadRequestException('ربات هنوز متصل نشده است.');
         }
 
+        // 🔒 بخش امنیتی جدید: بررسی سطح دسترسی ایجنت
+        // چک می‌کنیم آیا این User ID متعلق به یک ایجنت است؟
+        const agent = await this.prisma.agent.findFirst({
+            where: { userId: userId }
+        });
+
+        // اگر ایجنت بود و تیک "ارسال پیام" برایش خاموش بود ⛔
+        if (agent && agent.canSendMessage === false) {
+            throw new ForbiddenException('⛔ شما مجوز ارسال پیام متنی را ندارید.');
+        }
+
+        // --- از اینجا به بعد کد قبلی شماست ---
+
         // تمیزکاری ورودی (فقط اعداد)
         let cleanPhone = String(phone).replace(/\D/g, '');
         let jid;
 
-        // ✅ تغییر استراتژی: تشخیص هوشمند (شماره تلفن یا LID)
+        // ✅ تشخیص هوشمند (شماره تلفن یا LID)
         if (cleanPhone.length > 14) {
-            // اگر طولانی بود (بیشتر از ۱۴ رقم)، یعنی LID است
             console.log(`ℹ️ Sending message to LID: ${cleanPhone}`);
-            jid = `${cleanPhone}@lid`; // فرمت مخصوص LID
+            jid = `${cleanPhone}@lid`; 
         } else {
-            // اگر کوتاه بود، یعنی شماره تلفن معمولی است
             if (cleanPhone.startsWith('09')) cleanPhone = '98' + cleanPhone.substring(1);
             else if (cleanPhone.startsWith('0098')) cleanPhone = cleanPhone.substring(2);
 
             if (cleanPhone.length < 10) {
                 throw new BadRequestException(`شماره تلفن نامعتبر (خیلی کوتاه): ${cleanPhone}`);
             }
-            jid = `${cleanPhone}@s.whatsapp.net`; // فرمت مخصوص شماره تلفن
+            jid = `${cleanPhone}@s.whatsapp.net`; 
         }
 
-        // بررسی وجود شماره (فقط برای شماره‌های موبایل، چون LID همیشه معتبر است)
+        // بررسی وجود شماره (فقط برای شماره‌های موبایل)
         if (!jid.includes('@lid')) {
             const [onWhats] = await sock.onWhatsApp(jid);
             if (!onWhats?.exists) {
@@ -398,7 +409,7 @@ export class WhatsappService implements OnModuleInit {
             const sentMsg = await sock.sendMessage(jid, { text: message });
             await sock.sendPresenceUpdate('paused', jid);
 
-            // ذخیره در دیتابیس (همان cleanPhone را ذخیره می‌کنیم، چه شماره باشد چه LID)
+            // ذخیره در دیتابیس
             let contact = await this.prisma.contact.findUnique({ where: { phone: cleanPhone } });
             if (!contact) {
                 contact = await this.prisma.contact.create({ data: { phone: cleanPhone, pushName: 'Unknown' } });
@@ -436,9 +447,22 @@ export class WhatsappService implements OnModuleInit {
     }
 
     async sendImageBuffer(sessionId: string, phone: string, fileBuffer: Buffer, caption: string, userId: number, retryCount = 0) {
+        // 🔒 ۱. چک کردن سطح دسترسی ایجنت (فقط در تلاش اول چک کنید کافیست)
+        if (retryCount === 0) {
+            const agent = await this.prisma.agent.findFirst({
+                where: { userId: userId }
+            });
+
+            // اگر ایجنت بود و تیک "ارسال تصویر" نداشت ⛔
+            if (agent && agent.canSendImage === false) {
+                throw new ForbiddenException('⛔ شما مجوز ارسال تصویر را ندارید.');
+            }
+        }
+
         const sid = sessionId || this.DEFAULT_SESSION_ID;
         const sock = this.sessions.get(sid);
 
+        // تلاش مجدد در صورت قطعی لحظه‌ای
         if ((!sock || !sock.user) && retryCount < 3) {
             console.log(`⚠️ Robot appears offline. Waiting 5s... (Attempt ${retryCount + 1}/3)`);
             await new Promise(r => setTimeout(r, 5000));
@@ -447,12 +471,19 @@ export class WhatsappService implements OnModuleInit {
 
         if (!sock || !sock.user) throw new BadRequestException('ربات قطع است.');
 
+        // تمیزکاری شماره
         let cleanPhone = phone.replace(/\D/g, '');
         if (cleanPhone.startsWith('09')) cleanPhone = '98' + cleanPhone.substring(1);
         const jid = `${cleanPhone}@s.whatsapp.net`;
 
         try {
+            // ارسال عکس
             const sentMsg = await sock.sendMessage(jid, { image: fileBuffer, caption: caption });
+            
+            // ذخیره در دیتابیس (اختیاری ولی توصیه می‌شود)
+            // اگر می‌خواهید پیام‌های عکس هم در چت لاگ شوند، باید کد ذخیره در Message را اینجا اضافه کنید
+            // (مشابه sendTextMessage)
+
             return { status: 'sent', messageId: sentMsg?.key?.id };
         } catch (error: any) {
             if (retryCount < 3) {
@@ -464,14 +495,52 @@ export class WhatsappService implements OnModuleInit {
     }
 
     async sendDocumentMessage(sessionId: string, phone: string, fileUrl: string, fileName: string, caption: string, userId: number) {
+        // 🔒 ۱. بررسی مجوز ارسال فایل
+        const agent = await this.prisma.agent.findFirst({
+            where: { userId: userId }
+        });
+
+        if (agent && agent.canSendFile === false) {
+            throw new ForbiddenException('⛔ شما مجوز ارسال فایل را ندارید.');
+        }
+
+        // ۲. ارسال پیام
+        // توجه: این تابع نهایتاً sendTextMessage را صدا می‌زند، پس ایجنت باید مجوز ارسال متن را هم داشته باشد.
         return this.sendTextMessage(sessionId, phone, `${caption}\n\n📥 دانلود فایل: ${fileUrl}`, userId);
     }
 
-    async getConversations(sessionId: string) {
+    async getConversations(sessionId: string, user?: any) {
         const sid = sessionId || this.DEFAULT_SESSION_ID;
+        
+        // شرط پیش‌فرض: فقط مکالمات این سشن واتساپ
+        const whereCondition: any = { sessionId: sid };
+
+        // 👮‍♂️ لاجیک امنیتی برای ایجنت‌ها
+        if (user && user.role === 'AGENT') {
+            // ۱. پیدا کردن شناسه ایجنت از روی User ID
+            const agent = await this.prisma.agent.findFirst({
+                where: { userId: user.userId }
+                
+            });
+            
+            if (agent) {
+                if (agent.canViewInbox === false) {
+                    throw new ForbiddenException('⛔ شما مجوز مشاهده صندوق پیام‌ها (Team Inbox) را ندارید.');
+                }
+                whereCondition.assignedTo = agent.id;
+            } else {
+                // اگر ایجنت پیدا نشد، هیچ چتی نشان نده (امنیت)
+                return [];
+            }
+        }
+
+        // ۳. اجرای کوئری
         return this.prisma.conversation.findMany({
-            where: { sessionId: sid },
-            include: { contact: true, messages: { take: 1, orderBy: { createdAt: 'desc' } } },
+            where: whereCondition,
+            include: { 
+                contact: true, 
+                messages: { take: 1, orderBy: { createdAt: 'desc' } } 
+            },
             orderBy: { lastMessageAt: 'desc' }
         });
     }

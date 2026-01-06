@@ -32,6 +32,7 @@ model Session {
   phone           String?
   webhookUrl      String?
   defaultResponse String?   @default("متاسفانه متوجه نشدم. لطفا 'سلام' را بفرستید.")
+  aiEnabled       Boolean   @default(false)
   
   userId          Int
   user            User      @relation(fields: [userId], references: [id])
@@ -51,6 +52,13 @@ model Agent {
   
   userId    Int      
   user      User     @relation(fields: [userId], references: [id])
+
+  canSendMessage  Boolean @default(true)  
+  canSendImage    Boolean @default(true)  
+  canSendFile     Boolean @default(true)  // ارسال فایل
+  canViewInbox    Boolean @default(true)  // صندوق تیم
+  canViewContacts Boolean @default(true)  // مخاطبین
+  canUseOtp       Boolean @default(false) // سرویس OTP
 
   assignedConversations Conversation[] 
   createdAt DateTime @default(now())
