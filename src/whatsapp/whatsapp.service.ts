@@ -1,6 +1,7 @@
 import { Injectable, ForbiddenException,OnModuleInit, BadRequestException } from '@nestjs/common';
-import makeWASocket, { DisconnectReason, useMultiFileAuthState, WAMessageStatus } from '@whiskeysockets/baileys';
+import makeWASocket, {Browsers, DisconnectReason, useMultiFileAuthState, WAMessageStatus } from '@whiskeysockets/baileys';
 import * as QRCode from 'qrcode';
+import * as qrcodeTerminal from 'qrcode-terminal';
 import * as fs from 'fs';
 import * as path from 'path';
 import pino from 'pino';
@@ -24,15 +25,21 @@ export class WhatsappService implements OnModuleInit {
         private eventsGateway: EventsGateway,
         private webhookService: WebhookService
     ) { }
-
     async onModuleInit() {
         const authDir = 'auth_info';
         if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
         const sessions = fs.readdirSync(authDir);
-        for (const sessionName of sessions) {
-            if (sessionName.startsWith('session_')) {
-                const userId = parseInt(sessionName.split('_')[1]);
+        const validSessions = sessions.filter(s => s.startsWith('session_'));
+
+        // اگر پوشه خالی بود (چون دستی پاک کردیم)، سشن پیش‌فرض را بساز
+        if (validSessions.length === 0) {
+            console.log(`🚀 Starting new default session...`);
+            await this.start();
+        } else {
+            // اگر از قبل سشن داشت، آن‌ها را بازیابی کن
+            for (const sessionName of validSessions) {
+                const userId = parseInt(sessionName.split('_')[1]) || 1;
                 console.log(`🔄 Recovering ${sessionName}...`);
                 await this.createSession(sessionName, userId, false);
             }
@@ -54,7 +61,7 @@ export class WhatsappService implements OnModuleInit {
             auth: state,
             logger: pino({ level: 'silent' }) as any,
             printQRInTerminal: false,
-            browser: ['TeamInbox', 'Chrome', '1.0.0'],
+            browser:Browsers.macOS('Desktop'), //['TeamInbox', 'Chrome', '1.0.0'],
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 60000,
             keepAliveIntervalMs: 10000,
@@ -69,6 +76,7 @@ export class WhatsappService implements OnModuleInit {
 
             if (qr) {
                 console.log(`📷 QR Code generated`);
+                // qrcodeTerminal.generate(qr, { small: true });
                 const qrImage = await QRCode.toDataURL(qr);
                 this.qrCodes.set(sid, qrImage);
                 this.eventsGateway.sendMessageToClients('session:qr', { sessionId: sid, qr: qrImage });
@@ -77,14 +85,33 @@ export class WhatsappService implements OnModuleInit {
 
             if (connection === 'open') {
                 console.log(`✅ Session CONNECTED!`);
-                this.retryCounts.delete(sid); // ✅ ریست کردن شمارنده تلاش مجدد
+                this.retryCounts.delete(sid); 
                 this.qrCodes.delete(sid);
                 const myPhone = sock.user?.id?.split(':')[0];
                 this.eventsGateway.sendMessageToClients('session:connected', { sessionId: sid, phone: myPhone });
                 await this.saveSessionToDb(sid, 'CONNECTED', userId, myPhone);
+
+                // ۱. ارسال وضعیت آنلاین به محض متصل شدن
+                await sock.sendPresenceUpdate('available');
+
+                // ۲. ایجاد یک لوپ برای ارسال وضعیت آنلاین هر ۵ دقیقه یکبار
+                const presenceInterval = setInterval(async () => {
+                    const currentSock = this.sessions.get(sid);
+                    if (currentSock) {
+                        try {
+                            await currentSock.sendPresenceUpdate('available');
+                        } catch (error) {
+                            console.error('Error maintaining presence:', error);
+                        }
+                    } else {
+                        // اگر سشن بنا به هر دلیلی حذف شد، این لوپ را متوقف کن تا مموری لیک نشود
+                        clearInterval(presenceInterval); 
+                    }
+                }, 300000); // 300000 میلی‌ثانیه = 5 دقیقه
             }
 
             if (connection === 'close') {
+                console.error(`🔴 Connection Closed. Reason:`, lastDisconnect?.error?.message || lastDisconnect?.error);
                 const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
@@ -202,7 +229,7 @@ export class WhatsappService implements OnModuleInit {
                     msg,
                     'buffer',
                     {},
-                    { logger: pino({ level: 'silent' }) as any, reuploadRequest: sock.updateMediaMessage }
+                    { logger: pino({ level: 'info' }) as any, reuploadRequest: sock.updateMediaMessage }
                 );
                 const date = new Date();
                 const folderPath = path.join(process.cwd(), 'uploads', date.getFullYear().toString(), (date.getMonth() + 1).toString());

@@ -18,6 +18,7 @@ export class AppController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'دریافت آمار کلی داشبورد' })
   async getStats(@Request() req) {
-    return this.appService.getDashboardStats(req.user.userId);
+    // ✅ پاس دادن کل شیء کاربر (req.user) به جای فقط آیدی، تا بتوانیم ارتباط را پیدا کنیم
+    return this.appService.getDashboardStats(req.user);
   }
 }
