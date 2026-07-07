@@ -1,25 +1,4 @@
-// import { NestFactory } from '@nestjs/core';
-// import { AppModule } from './app.module';
-// import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
-// async function bootstrap() {
-//   const app = await NestFactory.create(AppModule);
-//   app.enableCors();
-
-//   const config = new DocumentBuilder()
-//     .setTitle('WhatsApp API')
-//     .setDescription('The WhatsApp automation API description')
-//     .setVersion('1.0')
-//     // 👇 این خط جدید است: اضافه کردن قابلیت توکن
-//     .addBearerAuth() 
-//     .build();
-
-//   const document = SwaggerModule.createDocument(app, config);
-//   SwaggerModule.setup('api', app, document);
-
-//   await app.listen(3000);
-// }
-// bootstrap();
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -30,7 +9,6 @@ import { join } from 'path'; // 👈 ۲. اضافه شده
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
-  // تنظیمات CORS (اختیاری ولی توصیه شده)
   app.enableCors({
     origin: '*',
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
@@ -59,6 +37,6 @@ async function bootstrap() {
     },
   });
 
-  await app.listen(3000);
+  await app.listen(3000, '0.0.0.0');
 }
 bootstrap();
